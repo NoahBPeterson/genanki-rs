@@ -5,7 +5,7 @@ use crate::{Error, Field};
 use fancy_regex::Regex;
 use ramhorns::Template as RamTemplate;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 const DEFAULT_LATEX_PRE: &str = r#"
 \documentclass[12pt]{article}
@@ -41,7 +41,7 @@ pub struct Model {
     latex_pre: String,
     latex_post: String,
     sort_field_index: i64,
-    sentinel_regexes: Rc<Vec<Regex>>, // Rc<_> so this can be clone
+    sentinel_regexes: Arc<Vec<Regex>>, // Arc<_> so this can be clone and Sync
 }
 
 impl Model {
@@ -249,8 +249,8 @@ impl Model {
     }
 }
 
-fn compile_sentinel_regexes(fields: &[Field]) -> Rc<Vec<Regex>> {
-    Rc::new(
+fn compile_sentinel_regexes(fields: &[Field]) -> Arc<Vec<Regex>> {
+    Arc::new(
         fields
             .iter()
             .map(|f| {
