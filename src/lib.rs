@@ -198,6 +198,7 @@ mod util;
 
 pub use builders::{Field, Template};
 pub use builtin_models::*;
+pub use card::{Card, RevlogEntry};
 pub use deck::Deck;
 pub use error::Error;
 pub use model::{Model, ModelType};

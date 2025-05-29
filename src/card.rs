@@ -3,20 +3,107 @@ use std::ops::RangeFrom;
 
 use crate::{error::database_error, Error};
 
+/// Represents a single review log entry from Anki's revlog table
+#[derive(Clone, Debug)]
+pub struct RevlogEntry {
+    pub id: i64,           // Timestamp when review occurred
+    pub ease: i32,         // Button pressed (1=again, 2=hard, 3=good, 4=easy)
+    pub ivl: i32,          // Interval after review
+    pub last_ivl: i32,     // Interval before review
+    pub factor: i32,       // Ease factor after review
+    pub time: i32,         // Time taken to answer (milliseconds)
+    pub review_type: i32,  // Type of review (0=learn, 1=review, 2=relearn, 3=cram)
+}
+
 #[derive(Clone)]
 pub struct Card {
     pub ord: i64,
     pub suspend: bool,
+    // Optional review data fields - if None, defaults to new card values
+    pub reps: Option<i32>,      // Number of reviews
+    pub lapses: Option<i32>,    // Number of lapses/failures  
+    pub ivl: Option<i32>,       // Interval in days
+    pub due: Option<i64>,       // Due date (Anki format)
+    pub factor: Option<i32>,    // Ease factor (e.g., 2500 = 2.5)
+    pub card_type: Option<i32>, // Card type (0=new, 1=learning, 2=review, 3=relearning)
+    pub queue: Option<i32>,     // Queue type
+    pub review_history: Vec<RevlogEntry>, // Review history for this card
 }
 
 impl Card {
     pub fn new(ord: i64, suspend: bool) -> Self {
-        Self { ord, suspend }
+        Self { 
+            ord, 
+            suspend,
+            reps: None,
+            lapses: None,
+            ivl: None,
+            due: None,
+            factor: None,
+            card_type: None,
+            queue: None,
+            review_history: Vec::new(),
+        }
     }
+
+    /// Create a card with review data for cards that have learning history
+    pub fn new_with_review_data(
+        ord: i64, 
+        suspend: bool,
+        reps: i32,
+        lapses: i32,
+        ivl: i32,
+        due: i64,
+        factor: i32,
+        card_type: i32,
+        queue: i32,
+    ) -> Self {
+        Self {
+            ord,
+            suspend,
+            reps: Some(reps),
+            lapses: Some(lapses),
+            ivl: Some(ivl),
+            due: Some(due),
+            factor: Some(factor),
+            card_type: Some(card_type),
+            queue: Some(queue),
+            review_history: Vec::new(),
+        }
+    }
+
+    /// Create a card with review data and review history
+    pub fn new_with_review_history(
+        ord: i64, 
+        suspend: bool,
+        reps: i32,
+        lapses: i32,
+        ivl: i32,
+        due: i64,
+        factor: i32,
+        card_type: i32,
+        queue: i32,
+        review_history: Vec<RevlogEntry>,
+    ) -> Self {
+        Self {
+            ord,
+            suspend,
+            reps: Some(reps),
+            lapses: Some(lapses),
+            ivl: Some(ivl),
+            due: Some(due),
+            factor: Some(factor),
+            card_type: Some(card_type),
+            queue: Some(queue),
+            review_history,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn ord(&self) -> i64 {
         self.ord
     }
+
     pub fn write_to_db(
         &self,
         transaction: &Transaction,
@@ -25,32 +112,60 @@ impl Card {
         note_id: usize,
         id_gen: &mut RangeFrom<usize>,
     ) -> Result<(), Error> {
-        let queue = if self.suspend { -1 } else { 0 };
+        let queue = if self.suspend { 
+            -1 
+        } else { 
+            self.queue.unwrap_or(0) 
+        };
+        
+        let card_id = id_gen.next();
+        
         transaction
             .execute(
                 "INSERT INTO cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
                 params![
-                    id_gen.next(),    // id
-                    note_id,          // nid
-                    deck_id,          // did
-                    self.ord,         // ord
-                    timestamp as i64, // mod
-                    -1,               // usn
-                    0,                // type (=0 for non-Cloze)
-                    queue,            // queue
-                    0,                // due
-                    0,                // ivl
-                    0,                // factor
-                    0,                // reps
-                    0,                // lapses
-                    0,                // left
-                    0,                // odue
-                    0,                // odid
-                    0,                // flags
-                    "",               // data
+                    card_id,                             // id
+                    note_id,                             // nid
+                    deck_id,                             // did
+                    self.ord,                            // ord
+                    timestamp as i64,                    // mod
+                    -1,                                  // usn
+                    self.card_type.unwrap_or(0),         // type - preserve review state
+                    queue,                               // queue - calculated above
+                    self.due.unwrap_or(0),               // due - preserve due date
+                    self.ivl.unwrap_or(0),               // ivl - preserve interval
+                    self.factor.unwrap_or(0),            // factor - preserve ease factor
+                    self.reps.unwrap_or(0),              // reps - preserve review count
+                    self.lapses.unwrap_or(0),            // lapses - preserve failure count
+                    0,                                   // left
+                    0,                                   // odue
+                    0,                                   // odid
+                    0,                                   // flags
+                    "",                                  // data
                 ],
             )
             .map_err(database_error)?;
+
+        // Write review history to revlog table
+        for revlog_entry in &self.review_history {
+            transaction
+                .execute(
+                    "INSERT INTO revlog VALUES(?,?,?,?,?,?,?,?,?);",
+                    params![
+                        revlog_entry.id,                 // id (timestamp)
+                        card_id,                         // cid (card id)
+                        -1,                              // usn
+                        revlog_entry.ease,               // ease
+                        revlog_entry.ivl,                // ivl
+                        revlog_entry.last_ivl,           // lastIvl
+                        revlog_entry.factor,             // factor
+                        revlog_entry.time,               // time
+                        revlog_entry.review_type,        // type
+                    ],
+                )
+                .map_err(database_error)?;
+        }
+        
         Ok(())
     }
 }

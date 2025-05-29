@@ -126,6 +126,34 @@ impl Note {
         }
     }
 
+    /// Creates a Note with custom cards that include review data
+    /// This is useful for preserving Anki review history when exporting
+    pub fn new_with_cards(
+        model: Model, 
+        fields: Vec<&str>,
+        cards: Vec<Card>,
+        guid: Option<&str>,
+        tags: Option<Vec<&str>>,
+    ) -> Result<Self, Error> {
+        let fields = fields.iter().map(|&s| s.to_string()).collect();
+        let tags = tags
+            .unwrap_or_default()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        validate_tags(&tags)?;
+        let guid = guid.unwrap_or(&guid_for(&fields)).to_string();
+        
+        Ok(Self {
+            model,
+            fields,
+            sort_field: false,
+            tags,
+            guid,
+            cards,
+        })
+    }
+
     pub(super) fn model(&self) -> Model {
         self.model.clone()
     }
