@@ -63,6 +63,50 @@ CREATE TABLE graves (
     oid             integer not null,
     type            integer not null
 );
+CREATE TABLE decks (
+    id              integer primary key not null,
+    name            text not null,
+    mtime_secs      integer not null,
+    usn             integer not null,
+    common          text not null, 
+    kind            text not null
+);
+CREATE TABLE deck_config (
+    id              integer primary key not null,
+    name            text not null,
+    mtime_secs      integer not null,
+    usn             integer not null,
+    config          text not null
+);
+CREATE TABLE notetypes (
+    id              integer primary key not null,
+    name            text not null,
+    mtime_secs      integer not null,
+    usn             integer not null,
+    config          text not null
+);
+CREATE TABLE templates (
+    ntid            integer not null,
+    ord             integer not null,
+    name            text not null,
+    mtime_secs      integer not null,
+    usn             integer not null,
+    config          text not null,
+    PRIMARY KEY (ntid, ord)
+);
+CREATE TABLE fields (
+    ntid            integer not null,
+    ord             integer not null,
+    name            text not null,
+    config          text not null,
+    PRIMARY KEY (ntid, ord)
+);
+CREATE TABLE config (
+    key             text primary key not null,
+    usn             integer not null,
+    mtime_secs      integer not null,
+    val             blob not null
+);
 CREATE INDEX ix_notes_usn on notes (usn);
 CREATE INDEX ix_cards_usn on cards (usn);
 CREATE INDEX ix_revlog_usn on revlog (usn);
@@ -70,4 +114,9 @@ CREATE INDEX ix_cards_nid on cards (nid);
 CREATE INDEX ix_cards_sched on cards (did, queue, due);
 CREATE INDEX ix_revlog_cid on revlog (cid);
 CREATE INDEX ix_notes_csum on notes (csum);
+CREATE INDEX ix_decks_usn ON decks (usn);
+CREATE INDEX ix_deck_config_usn ON deck_config (usn);
+CREATE INDEX ix_notetypes_usn ON notetypes (usn);
+CREATE INDEX ix_templates_usn ON templates (usn);
+CREATE INDEX ix_fields_ntid ON fields (ntid);
 "#;

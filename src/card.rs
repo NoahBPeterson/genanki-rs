@@ -28,6 +28,7 @@ pub struct Card {
     pub card_type: Option<i32>, // Card type (0=new, 1=learning, 2=review, 3=relearning)
     pub queue: Option<i32>,     // Queue type
     pub review_history: Vec<RevlogEntry>, // Review history for this card
+    pub data: Option<String>,  // Added data field for FSRS JSON etc.
 }
 
 impl Card {
@@ -43,6 +44,7 @@ impl Card {
             card_type: None,
             queue: None,
             review_history: Vec::new(),
+            data: None, // Initialize new field
         }
     }
 
@@ -69,6 +71,7 @@ impl Card {
             card_type: Some(card_type),
             queue: Some(queue),
             review_history: Vec::new(),
+            data: None, // Initialize, to be set by a setter or new constructor variant if needed
         }
     }
 
@@ -84,6 +87,7 @@ impl Card {
         card_type: i32,
         queue: i32,
         review_history: Vec<RevlogEntry>,
+        data: Option<String>, // Added data parameter
     ) -> Self {
         Self {
             ord,
@@ -96,6 +100,7 @@ impl Card {
             card_type: Some(card_type),
             queue: Some(queue),
             review_history,
+            data, // Assign from parameter
         }
     }
 
@@ -124,24 +129,24 @@ impl Card {
             .execute(
                 "INSERT INTO cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
                 params![
-                    card_id,                             // id
-                    note_id,                             // nid
-                    deck_id,                             // did
-                    self.ord,                            // ord
-                    timestamp as i64,                    // mod
-                    -1,                                  // usn
-                    self.card_type.unwrap_or(0),         // type - preserve review state
-                    queue,                               // queue - calculated above
-                    self.due.unwrap_or(0),               // due - preserve due date
-                    self.ivl.unwrap_or(0),               // ivl - preserve interval
-                    self.factor.unwrap_or(0),            // factor - preserve ease factor
-                    self.reps.unwrap_or(0),              // reps - preserve review count
-                    self.lapses.unwrap_or(0),            // lapses - preserve failure count
-                    0,                                   // left
-                    0,                                   // odue
-                    0,                                   // odid
-                    0,                                   // flags
-                    "",                                  // data
+                    card_id,                             // id (idx 0)
+                    note_id,                             // nid (idx 1)
+                    deck_id,                             // did (idx 2)
+                    self.ord,                            // ord (idx 3)
+                    timestamp as i64,                    // mod (idx 4)
+                    -1,                                  // usn (idx 5)
+                    self.card_type.unwrap_or(0),         // type (idx 6)
+                    queue,                               // queue (idx 7)
+                    self.due.unwrap_or(0),               // due (idx 8)
+                    self.ivl.unwrap_or(0),               // ivl (idx 9)
+                    self.factor.unwrap_or(0),            // factor (idx 10)
+                    self.reps.unwrap_or(0),              // reps (idx 11)
+                    self.lapses.unwrap_or(0),            // lapses (idx 12)
+                    0,                                   // left (idx 13)
+                    0,                                   // odue (idx 14)
+                    0,                                   // odid (idx 15)
+                    0,                                   // flags (idx 16)
+                    self.data.as_deref().unwrap_or(""),    // data (idx 17)
                 ],
             )
             .map_err(database_error)?;

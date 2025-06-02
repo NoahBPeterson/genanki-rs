@@ -50,7 +50,7 @@ pub struct ModelDbEntry {
     pub latex_post: String,
     #[serde(rename = "type")]
     pub model_db_entry_type: i64,
-    pub id: String,
+    pub id: i64,
     pub css: String,
     #[serde(rename = "latexPre")]
     pub latex_pre: String,

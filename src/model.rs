@@ -230,7 +230,7 @@ impl Model {
             model_db_entry_mod: timestamp as i64,
             latex_post: self.latex_post.clone(),
             model_db_entry_type: model_type,
-            id: self.id.to_string(),
+            id: self.id,
             css: self.css.clone(),
             latex_pre: self.latex_pre.clone(),
         })

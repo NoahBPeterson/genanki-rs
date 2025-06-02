@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::NamedTempFile;
 use zip::{write::FileOptions, ZipWriter};
@@ -8,12 +8,12 @@ use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
-use crate::apkg_col::APKG_COL;
 use crate::apkg_schema::APKG_SCHEMA;
 use crate::deck::Deck;
 use crate::error::{database_error, json_error, zip_error};
 use crate::Error;
 use std::str::FromStr;
+use crate::db_entries::{DeckDbEntry, ModelDbEntry};
 
 /// `Package` to pack `Deck`s and `media_files` and write them to a `.apkg` file
 ///
@@ -91,22 +91,20 @@ impl Package {
     fn write_maybe_timestamp<W: Write + Seek>(
         &mut self,
         writer: W,
-        timestamp: Option<f64>,
+        timestamp_opt: Option<f64>,
     ) -> Result<(), Error> {
         let db_file = NamedTempFile::new()?.into_temp_path();
-
         let mut conn = Connection::open(&db_file).map_err(database_error)?;
         let transaction = conn.transaction().map_err(database_error)?;
 
-        let timestamp = if let Some(timestamp) = timestamp {
-            timestamp
-        } else {
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64()
-        };
+        let timestamp_sec = timestamp_opt
+            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64());
 
-        self.write_to_db(&transaction, timestamp)?;
+        self.write_schema_and_col_table(&transaction, timestamp_sec)?;
+        self.write_deck_content_data(&transaction, timestamp_sec)?;
+
         transaction.commit().map_err(database_error)?;
-        conn.close().expect("Should always close");
+        conn.close().map_err(|(_, e)| database_error(e)).expect("Should always close");
 
         let mut outzip = ZipWriter::new(writer);
         outzip
@@ -148,16 +146,59 @@ impl Package {
         Ok(())
     }
 
-    fn write_to_db(&mut self, transaction: &Transaction, timestamp: f64) -> Result<(), Error> {
-        let mut id_gen = ((timestamp * 1000.0) as usize)..;
-        transaction
-            .execute_batch(APKG_SCHEMA)
-            .map_err(database_error)?;
-        transaction
-            .execute_batch(APKG_COL)
-            .map_err(database_error)?;
+    fn write_schema_and_col_table(&self, transaction: &Transaction, timestamp_sec: f64) -> Result<(), Error> {
+        transaction.execute_batch(APKG_SCHEMA).map_err(database_error)?;
+
+        let crt_val = timestamp_sec as i64;
+        let mod_val = (timestamp_sec * 1000.0) as i64;
+        let scm_val = mod_val;
+
+        let mut models_map_for_col: HashMap<String, ModelDbEntry> = HashMap::new();
+        for deck_item in &self.decks {
+            for note in deck_item.notes() { 
+                let mut model_clone = note.model().clone(); 
+                let model_id_str = model_clone.id.to_string();
+                if !models_map_for_col.contains_key(&model_id_str) {
+                    models_map_for_col.insert(model_id_str, model_clone.to_model_db_entry(timestamp_sec, deck_item.id)?);
+                }
+            }
+        }
+        let models_json_str = serde_json::to_string(&models_map_for_col).map_err(json_error)?;
+
+        let mut decks_map_for_col: HashMap<String, DeckDbEntry> = HashMap::new();
+        for deck_item in &self.decks {
+            decks_map_for_col.insert(deck_item.id.to_string(), deck_item.to_deck_db_entry());
+        }
+        
+        if !decks_map_for_col.contains_key("1") {
+            let default_deck = Deck::new(1, "Default", "");
+            decks_map_for_col.insert("1".to_string(), default_deck.to_deck_db_entry());
+        }
+        let decks_json_str = serde_json::to_string(&decks_map_for_col).map_err(json_error)?;
+        
+        let default_conf_json = "{\"activeDecks\": [1], \"addToCur\": true, \"collapseTime\": 1200, \"curDeck\": 1, \"curModel\": \"1607392319\", \"dueCounts\": true, \"estTimes\": true, \"newBury\": true, \"newSpread\": 0, \"nextPos\": 1, \"sortBackwards\": false, \"sortType\": \"noteFld\", \"timeLim\": 0}";
+        let default_dconf_json = "{\"1\": {\"autoplay\": true, \"id\": 1, \"lapse\": {\"delays\": [10], \"leechAction\": 0, \"leechFails\": 8, \"minInt\": 1, \"mult\": 0}, \"maxTaken\": 60, \"mod\": 0, \"name\": \"Default\", \"new\": {\"bury\": true, \"delays\": [1, 10], \"initialFactor\": 2500, \"ints\": [1, 4, 7], \"order\": 1, \"perDay\": 20, \"separate\": true}, \"replayq\": true, \"rev\": {\"bury\": true, \"ease4\": 1.3, \"fuzz\": 0.05, \"ivlFct\": 1, \"maxIvl\": 36500, \"minSpace\": 1, \"perDay\": 100}, \"timer\": 0, \"usn\": 0}}";
+
+        transaction.execute(
+            "INSERT INTO col (id, crt, mod, scm, ver, dty, usn, ls, conf, models, decks, dconf, tags) VALUES (NULL, ?, ?, ?, 11, 0, -1, 0, ?, ?, ?, ?, ?)",
+            params![
+                crt_val,
+                mod_val,
+                scm_val,
+                default_conf_json,
+                models_json_str,
+                decks_json_str,
+                default_dconf_json,
+                "{}"
+            ],
+        ).map_err(database_error)?;
+        Ok(())
+    }
+
+    fn write_deck_content_data(&mut self, transaction: &Transaction, timestamp_sec: f64) -> Result<(), Error> {
+        let mut id_gen = ((timestamp_sec * 1000.0) as usize)..;
         for deck in &mut self.decks {
-            deck.write_to_db(&transaction, timestamp, &mut id_gen)?;
+            deck.write_notes_and_cards_to_db(&transaction, timestamp_sec, &mut id_gen)?;
         }
         Ok(())
     }
