@@ -204,6 +204,8 @@ pub use error::Error;
 pub use model::{Model, ModelType};
 pub use note::Note;
 pub use package::Package;
+pub use package::ConfigEntry;
+pub use package::DeckConfigEntry;
 
 #[cfg(test)]
 mod tests {

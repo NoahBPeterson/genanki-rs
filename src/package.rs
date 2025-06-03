@@ -15,11 +15,30 @@ use crate::Error;
 use std::str::FromStr;
 use crate::db_entries::{DeckDbEntry, ModelDbEntry};
 
+/// Represents an entry in the 'config' table of an Anki collection.
+#[derive(Debug, Clone)]
+pub struct ConfigEntry {
+    pub key: String,
+    pub usn: i64,
+    pub mtime_secs: i64,
+    pub val: Vec<u8>,
+}
+
+/// Represents an entry in the 'deck_config' table of an Anki collection.
+#[derive(Debug, Clone)]
+pub struct DeckConfigEntry {
+    pub id: i64,
+    pub name: String,
+    pub mtime_secs: i64,
+    pub usn: i64,
+    pub config_blob: Vec<u8>,
+}
+
 /// `Package` to pack `Deck`s and `media_files` and write them to a `.apkg` file
 ///
 /// Example:
 /// ```rust
-/// use genanki_rs::{Package, Deck, Note, Model, Field, Template};
+/// use genanki_rs::{Package, Deck, Note, Model, Field, Template, ConfigEntry, DeckConfigEntry};
 ///
 /// let model = Model::new(
 ///     1607392319,
@@ -42,8 +61,10 @@ use crate::db_entries::{DeckDbEntry, ModelDbEntry};
 /// package.write_to_file("output.apkg")?;
 /// ```
 pub struct Package {
-    decks: Vec<Deck>,
+    pub decks: Vec<Deck>,
     media_files: Vec<PathBuf>,
+    configs: Vec<ConfigEntry>,
+    deck_configs: Vec<DeckConfigEntry>,
 }
 
 impl Package {
@@ -55,7 +76,17 @@ impl Package {
             .iter()
             .map(|&s| PathBuf::from_str(s))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { decks, media_files })
+        Ok(Self { decks, media_files, configs: Vec::new(), deck_configs: Vec::new() })
+    }
+
+    /// Adds a configuration entry to the package.
+    pub fn add_config_entry(&mut self, entry: ConfigEntry) {
+        self.configs.push(entry);
+    }
+
+    /// Adds a deck configuration entry to the package.
+    pub fn add_deck_config_entry(&mut self, entry: DeckConfigEntry) {
+        self.deck_configs.push(entry);
     }
 
     /// Writes the package to any writer that implements Write and Seek
@@ -148,6 +179,37 @@ impl Package {
 
     fn write_schema_and_col_table(&self, transaction: &Transaction, timestamp_sec: f64) -> Result<(), Error> {
         transaction.execute_batch(APKG_SCHEMA).map_err(database_error)?;
+
+        // Write config table entries
+        for config_entry in &self.configs {
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO config (key, usn, mtime_secs, val) VALUES (?, ?, ?, ?)",
+                    params![
+                        config_entry.key,
+                        config_entry.usn,
+                        config_entry.mtime_secs,
+                        config_entry.val
+                    ],
+                )
+                .map_err(database_error)?;
+        }
+
+        // Write deck_config table entries
+        for deck_config_entry in &self.deck_configs {
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO deck_config (id, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?)",
+                    params![
+                        deck_config_entry.id,
+                        deck_config_entry.name,
+                        deck_config_entry.mtime_secs,
+                        deck_config_entry.usn,
+                        deck_config_entry.config_blob
+                    ],
+                )
+                .map_err(database_error)?;
+        }
 
         let crt_val = timestamp_sec as i64;
         let mod_val = (timestamp_sec * 1000.0) as i64;
