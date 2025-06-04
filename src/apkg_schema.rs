@@ -120,3 +120,25 @@ CREATE INDEX ix_notetypes_usn ON notetypes (usn);
 CREATE INDEX ix_templates_usn ON templates (usn);
 CREATE INDEX ix_fields_ntid ON fields (ntid);
 "#;
+
+pub const APKG_SCHEMA_NOTETYPES: &str = r#"
+CREATE TABLE IF NOT EXISTS notetypes (
+    id              integer primary key not null,
+    name            text not null,
+    mtime_secs      integer not null,
+    usn             integer not null,
+    config          blob not null
+);
+CREATE INDEX IF NOT EXISTS ix_notetypes_usn ON notetypes (usn);
+"#;
+
+pub const APKG_SCHEMA_FIELDS: &str = r#"
+CREATE TABLE IF NOT EXISTS fields (
+    ntid            integer not null,
+    ord             integer not null,
+    name            text not null,
+    config          blob not null,
+    PRIMARY KEY (ntid, ord)
+);
+CREATE INDEX IF NOT EXISTS ix_fields_ntid ON fields (ntid);
+"#;

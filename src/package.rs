@@ -7,8 +7,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use log::info;
 
-use crate::apkg_schema::APKG_SCHEMA;
+use crate::apkg_schema::{APKG_SCHEMA, APKG_SCHEMA_FIELDS};
+use crate::apkg_col::APKG_COL;
 use crate::deck::Deck;
 use crate::error::{database_error, json_error, zip_error};
 use crate::Error;
@@ -34,70 +36,26 @@ pub struct DeckConfigEntry {
     pub config_blob: Vec<u8>,
 }
 
-/// `Package` to pack `Deck`s and `media_files` and write them to a `.apkg` file
-///
-/// # Example (media files on the filesystem):
-/// ```rust
-/// use genanki_rs::{Package, Deck, Note, Model, Field, Template, ConfigEntry, DeckConfigEntry};
-///
-/// let model = Model::new(
-///     1607392319,
-///     "Simple Model",
-///     vec![
-///         Field::new("Question"),
-///         Field::new("Answer"),
-///         Field::new("MyMedia"),
-///     ],
-///     vec![Template::new("Card 1")
-///         .qfmt("{{Question}}{{Question}}<br>{{MyMedia}}")
-///         .afmt(r#"{{FrontSide}}<hr id="answer">{{Answer}}"#)],
-/// );
-///
-/// let mut deck = Deck::new(1234, "Example Deck", "Example Deck with media");
-/// deck.add_note(Note::new(model.clone(), vec!["What is the capital of France?", "Paris", "[sound:sound.mp3]"])?);
-/// deck.add_note(Note::new(model.clone(), vec!["What is the capital of France?", "Paris", r#"<img src="image.jpg">"#])?);
-///
-/// let mut package = Package::new(vec![my_deck], vec!["sound.mp3", "images/image.jpg"])?;
-/// package.write_to_file("output.apkg")?;
-/// ```
-/// # Example (media files from memory):
-/// ```rust	
-/// use genanki_rs::{Package, Deck, Note, Model, Field, Template, MediaFile};
+/// Added DeckInfoEntry struct
+#[derive(Debug, Clone)]
+pub struct DeckInfoEntry {
+    pub id: i64,
+    pub name: String,
+    pub mtime_secs: i64,
+    pub usn: i64,
+    pub common: Vec<u8>, // Expects JSON blob
+    pub kind: Vec<u8>,   // Expects JSON blob
+}
 
-/// const VALID_MP3: &[u8] =
-/// b"\xff\xe3\x18\xc4\x00\x00\x00\x03H\x00\x00\x00\x00LAME3.98.2\x00\x00\x00\
-/// \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
-/// \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
-/// \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-/// 
-/// const VALID_JPG: &[u8] =
-/// b"\xff\xd8\xff\xdb\x00C\x00\x03\x02\x02\x02\x02\x02\x03\x02\x02\x02\x03\x03\
-/// \x03\x03\x04\x06\x04\x04\x04\x04\x04\x08\x06\x06\x05\x06\t\x08\n\n\t\x08\t\
-/// \t\n\x0c\x0f\x0c\n\x0b\x0e\x0b\t\t\r\x11\r\x0e\x0f\x10\x10\x11\x10\n\x0c\
-/// \x12\x13\x12\x10\x13\x0f\x10\x10\x10\xff\xc9\x00\x0b\x08\x00\x01\x00\x01\
-/// \x01\x01\x11\x00\xff\xcc\x00\x06\x00\x10\x10\x05\xff\xda\x00\x08\x01\x01\
-/// \x00\x00?\x00\xd2\xcf \xff\xd9";
-/// 
-/// let model = Model::new(
-/// 1607392319,
-/// "Simple Model",
-/// vec![
-///     Field::new("Question"),
-///     Field::new("Answer"),
-///     Field::new("MyMedia"),
-/// ],
-/// vec![Template::new("Card 1")
-///     .qfmt("{{Question}}{{Question}}<br>{{MyMedia}}")
-///     .afmt(r#"{{FrontSide}}<hr id="answer">{{Answer}}"#)],
-/// );
-/// let mut deck = Deck::new(1234, "Example Deck", "Example Deck with media");
-/// deck.add_note(Note::new(model.clone(), vec!["What is the capital of France?", "Paris", "[sound:sound.mp3]"])?);
-/// deck.add_note(Note::new(model.clone(), vec!["What is the capital of France?", "Paris", r#"<img src="image.jpg">"#])?);
-/// 
-/// let mut package = Package::new_from_memory(vec![deck], vec![MediaFile::new_from_bytes(VALID_MP3, "sound.mp3"), MediaFile::new_from_bytes(VALID_JPG, "image.jpg")])?;
-/// package.write_to_file("output.apkg")?;
-/// ```
-
+/// Added NotetypeEntry struct
+#[derive(Debug, Clone)]
+pub struct NotetypeEntry {
+    pub id: i64, // Note type ID (Primary Key). Timestamp in ms.
+    pub name: String, // Name of the note type.
+    pub mtime_secs: i64, // Modification timestamp (seconds).
+    pub usn: i64, // Update Sequence Number.
+    pub config: Vec<u8>, // JSON blob containing sort field, CSS, etc.
+}
 
 /// the location of the media files, either as a path on the filesystem or as bytes from memory
 pub enum MediaFile {
@@ -123,23 +81,72 @@ impl MediaFile {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FieldEntry {
+    pub ntid: i64,
+    pub ord: i64,
+    pub name: String,
+    pub config: Vec<u8>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TemplateEntry {
+    pub ntid: i64,
+    pub ord: i64,
+    pub name: String,
+    pub mtime_secs: i64,
+    pub usn: i64,
+    pub config: Vec<u8>, // JSON blob
+}
+
+/// `Package` to pack `Deck`s and `media_files` and write them to a `.apkg` file
+///
+/// Example:
+/// ```rust
+/// use genanki_rs::{Package, Deck, Note, Model, Field, Template, ConfigEntry, DeckConfigEntry};
+///
+/// let model = Model::new(
+///     1607392319,
+///     "Simple Model",
+///     vec![
+///         Field::new("Question"),
+///         Field::new("Answer"),
+///         Field::new("MyMedia"),
+///     ],
+///     vec![Template::new("Card 1")
+///         .qfmt("{{Question}}{{Question}}<br>{{MyMedia}}")
+///         .afmt(r#"{{FrontSide}}<hr id="answer">{{Answer}}"#)],
+/// );
+///
+/// let mut deck = Deck::new(1234, "Example Deck", "Example Deck with media");
+/// deck.add_note(Note::new(model.clone(), vec!["What is the capital of France?", "Paris", "[sound:sound.mp3]"])?);
+/// deck.add_note(Note::new(model.clone(), vec!["What is the capital of France?", "Paris", r#"<img src="image.jpg">"#])?);
+///
+/// let mut package = Package::new(vec![my_deck], vec!["sound.mp3", "images/image.jpg"])?;
+/// package.write_to_file("output.apkg")?;
+/// ```
+
 pub struct Package {
     pub decks: Vec<Deck>,
     media_files: Vec<MediaFile>,
     configs: Vec<ConfigEntry>,
     deck_configs: Vec<DeckConfigEntry>,
+    deck_infos: Vec<DeckInfoEntry>,
+    notetypes: Vec<NotetypeEntry>,
+    field_entries: Vec<FieldEntry>,
+    template_entries: Vec<TemplateEntry>,
 }
 
 impl Package {
     /// Create a new package with `decks` and `media_files`
     ///
     /// Returns `Err` if `media_files` are invalid
-    pub fn new(decks: Vec<Deck>, media_files: Vec<&str>) -> Result<Self, Error> {
+    pub fn new(decks: Vec<Deck>, media_files: Vec<String>) -> Result<Self, Error> {
         let media_files = media_files
             .iter()
-            .map(|&s| PathBuf::from_str(s).map(|p| MediaFile::Path(p)))
+            .map(|s| PathBuf::from_str(s.as_str()).map(|p| MediaFile::Path(p)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { decks, media_files, configs: Vec::new(), deck_configs: Vec::new() })
+        Ok(Self { decks, media_files, configs: Vec::new(), deck_configs: Vec::new(), deck_infos: Vec::new(), notetypes: Vec::new(), field_entries: Vec::new(), template_entries: Vec::new() })
     }
 
     /// Adds a configuration entry to the package.
@@ -152,12 +159,32 @@ impl Package {
         self.deck_configs.push(entry);
     }
 
+    /// Adds a deck info entry to the package.
+    pub fn add_deck_info_entry(&mut self, entry: DeckInfoEntry) {
+        self.deck_infos.push(entry);
+    }
+
+    /// Adds a notetype entry to the package.
+    pub fn add_notetype_entry(&mut self, entry: NotetypeEntry) {
+        self.notetypes.push(entry);
+    }
+
+    /// Adds a field entry to the package.
+    pub fn add_field_entry(&mut self, entry: FieldEntry) {
+        self.field_entries.push(entry);
+    }
+
+    /// Adds a template entry to the package.
+    pub fn add_template_entry(&mut self, entry: TemplateEntry) {
+        self.template_entries.push(entry);
+    }
+
     /// Create a new package with `decks` and `media_files`,
     /// where `media_files` can be bytes from memory or a path on the filesystem
     /// 
     /// Returns `Err` if `media_files` are invalid
     pub fn new_from_memory(decks: Vec<Deck>, media_files: Vec<MediaFile>) -> Result<Self, Error> {
-        Ok(Self { decks, media_files, configs: Vec::new(), deck_configs: Vec::new() })
+        Ok(Self { decks, media_files, configs: Vec::new(), deck_configs: Vec::new(), deck_infos: Vec::new(), notetypes: Vec::new(), field_entries: Vec::new(), template_entries: Vec::new() })
     }
 
     /// Writes the package to any writer that implements Write and Seek
@@ -287,6 +314,76 @@ impl Package {
                 )
                 .map_err(database_error)?;
         }
+
+        // Create decks table (if it doesn't exist from APKG_SCHEMA - it usually doesn't define it explicitly)
+        transaction.execute(
+            "CREATE TABLE IF NOT EXISTS decks (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                mtime_secs INTEGER NOT NULL,
+                usn INTEGER NOT NULL,
+                common BLOB NOT NULL,
+                kind BLOB NOT NULL
+            )",
+            [],
+        ).map_err(database_error)?; // Ensure this uses map_err(database_error)
+
+        // Insert deck_info entries
+        for deck_info_entry in &self.deck_infos {
+            transaction.execute(
+                "INSERT INTO decks (id, name, mtime_secs, usn, common, kind) VALUES (?, ?, ?, ?, ?, ?)",
+                params![
+                    deck_info_entry.id,
+                    deck_info_entry.name,
+                    deck_info_entry.mtime_secs,
+                    deck_info_entry.usn,
+                    deck_info_entry.common,
+                    deck_info_entry.kind
+                ],
+            ).map_err(database_error)?; // Ensure this uses map_err(database_error)
+        }
+
+        // Create notetypes table (Anki schema)
+        transaction.execute(
+            "CREATE TABLE IF NOT EXISTS notetypes (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                mtime_secs INTEGER NOT NULL,
+                usn INTEGER NOT NULL,
+                config BLOB NOT NULL
+            )",
+            [],
+        ).map_err(database_error)?;
+
+        // Insert notetype entries
+        for notetype_entry in &self.notetypes {
+            transaction.execute(
+                "INSERT INTO notetypes (id, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?)",
+                params![
+                    notetype_entry.id,
+                    notetype_entry.name,
+                    notetype_entry.mtime_secs,
+                    notetype_entry.usn,
+                    notetype_entry.config,
+                ],
+            ).map_err(database_error)?;
+        }
+        info!("Wrote {} entries to notetypes table.", self.notetypes.len());
+
+        // Create fields table and insert data
+        transaction.execute_batch(APKG_SCHEMA_FIELDS).map_err(database_error)?;
+        let mut stmt_fields = transaction.prepare("INSERT INTO fields (ntid, ord, name, config) VALUES (?, ?, ?, ?)").map_err(database_error)?;
+        for entry in &self.field_entries {
+            stmt_fields.execute(params![entry.ntid, entry.ord, entry.name, entry.config]).map_err(database_error)?;
+        }
+        info!("Wrote {} entries to fields table.", self.field_entries.len());
+
+        // Create templates table and insert data (CREATE TABLE is in APKG_SCHEMA)
+        let mut stmt_templates = transaction.prepare("INSERT INTO templates (ntid, ord, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?, ?)").map_err(database_error)?;
+        for entry in &self.template_entries {
+            stmt_templates.execute(params![entry.ntid, entry.ord, entry.name, entry.mtime_secs, entry.usn, entry.config]).map_err(database_error)?;
+        }
+        info!("Wrote {} entries to templates table.", self.template_entries.len());
 
         let crt_val = timestamp_sec as i64;
         let mod_val = (timestamp_sec * 1000.0) as i64;
