@@ -27,8 +27,10 @@ pub struct Card {
     pub factor: Option<i32>,    // Ease factor (e.g., 2500 = 2.5)
     pub card_type: Option<i32>, // Card type (0=new, 1=learning, 2=review, 3=relearning)
     pub queue: Option<i32>,     // Queue type
+    pub left: Option<i32>,      // Steps remaining
     pub review_history: Vec<RevlogEntry>, // Review history for this card
     pub data: Option<String>,  // Added data field for FSRS JSON etc.
+    pub custom_card_id: Option<i64>, // Custom card ID to use instead of generated one
 }
 
 impl Card {
@@ -43,8 +45,10 @@ impl Card {
             factor: None,
             card_type: None,
             queue: None,
+            left: None,
             review_history: Vec::new(),
             data: None, // Initialize new field
+            custom_card_id: None,
         }
     }
 
@@ -59,6 +63,7 @@ impl Card {
         factor: i32,
         card_type: i32,
         queue: i32,
+        left: i32,
     ) -> Self {
         Self {
             ord,
@@ -70,8 +75,10 @@ impl Card {
             factor: Some(factor),
             card_type: Some(card_type),
             queue: Some(queue),
+            left: Some(left),
             review_history: Vec::new(),
             data: None, // Initialize, to be set by a setter or new constructor variant if needed
+            custom_card_id: None,
         }
     }
 
@@ -86,6 +93,7 @@ impl Card {
         factor: i32,
         card_type: i32,
         queue: i32,
+        left: i32,
         review_history: Vec<RevlogEntry>,
         data: Option<String>, // Added data parameter
     ) -> Self {
@@ -99,8 +107,10 @@ impl Card {
             factor: Some(factor),
             card_type: Some(card_type),
             queue: Some(queue),
+            left: Some(left),
             review_history,
             data, // Assign from parameter
+            custom_card_id: None,
         }
     }
 
@@ -123,7 +133,12 @@ impl Card {
             self.queue.unwrap_or(0) 
         };
         
-        let card_id = id_gen.next();
+        // Use custom card ID if provided, otherwise generate one
+        let card_id = if let Some(custom_id) = self.custom_card_id {
+            custom_id as usize
+        } else {
+            id_gen.next().unwrap()
+        };
         
         transaction
             .execute(
@@ -142,7 +157,7 @@ impl Card {
                     self.factor.unwrap_or(0),            // factor (idx 10)
                     self.reps.unwrap_or(0),              // reps (idx 11)
                     self.lapses.unwrap_or(0),            // lapses (idx 12)
-                    0,                                   // left (idx 13)
+                    self.left.unwrap_or(0),              // left (idx 13)
                     0,                                   // odue (idx 14)
                     0,                                   // odid (idx 15)
                     0,                                   // flags (idx 16)

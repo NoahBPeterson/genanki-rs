@@ -31,6 +31,7 @@ pub struct Note {
     sort_field: bool,
     tags: Vec<String>,
     guid: String,
+    pub(crate) id: Option<i64>,
     cards: Vec<Card>,
 }
 
@@ -58,6 +59,7 @@ impl Note {
             sort_field: false,
             tags: vec![],
             guid,
+            id: None,
             cards,
         })
     }
@@ -93,6 +95,7 @@ impl Note {
             sort_field: sort_field.unwrap_or(false),
             tags,
             guid,
+            id: None,
             cards,
         })
     }
@@ -126,6 +129,12 @@ impl Note {
         }
     }
 
+    /// Sets the ID for this note
+    pub fn set_id(mut self, id: i64) -> Self {
+        self.id = Some(id);
+        self
+    }
+
     /// Creates a Note with custom cards that include review data
     /// This is useful for preserving Anki review history when exporting
     pub fn new_with_cards(
@@ -150,6 +159,7 @@ impl Note {
             sort_field: false,
             tags,
             guid,
+            id: None,
             cards,
         })
     }
@@ -207,25 +217,41 @@ impl Note {
     ) -> Result<(), Error> {
         self.check_number_model_fields_matches_num_fields()?;
         self.check_invalid_html_tags_in_fields()?;
+        // sfld should be the text value of the sort field (defaults to first field)
+        let sort_field_idx = self.model.sort_field_idx() as usize;
+        let sfld_value = if sort_field_idx < self.fields.len() {
+            &self.fields[sort_field_idx]
+        } else if !self.fields.is_empty() {
+            &self.fields[0] // fallback to first field if index is out of bounds
+        } else {
+            ""
+        };
+        
+        let note_id = if let Some(id) = self.id {
+            id as usize
+        } else {
+            id_gen.next().unwrap()
+        };
+
         transaction
             .execute(
                 "INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?);",
                 params![
-                    id_gen.next(),        // id
+                    note_id,              // id
                     self.get_guid(),      // guid
                     self.model.id,        // mid
                     timestamp as i64,     // mod
                     -1,                   // usn
                     self.format_tags(),   // TODO tags
                     self.format_fields(), // flds
-                    self.sort_field,      // sfld
+                    sfld_value,           // sfld - text value of sort field
                     0,                    // csum, can be ignored
                     0,                    // flags
                     "",                   // data
                 ],
             )
             .map_err(database_error)?;
-        let note_id = transaction.last_insert_rowid() as usize;
+        // let note_id = transaction.last_insert_rowid() as usize; // We already know note_id
         for card in &self.cards {
             card.write_to_db(transaction, timestamp, deck_id, note_id, &mut id_gen)?
         }

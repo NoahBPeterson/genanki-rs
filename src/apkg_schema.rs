@@ -22,7 +22,7 @@ CREATE TABLE notes (
     usn             integer not null,      /* 4 */
     tags            text not null,         /* 5 */
     flds            text not null,         /* 6 */
-    sfld            integer not null,      /* 7 */
+    sfld            text not null,         /* 7 */
     csum            integer not null,      /* 8 */
     flags           integer not null,      /* 9 */
     data            text not null          /* 10 */
