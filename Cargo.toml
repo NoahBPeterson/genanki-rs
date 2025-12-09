@@ -1,6 +1,6 @@
 [package]
 name = "genanki-rs"
-version = "0.4.1"
+version = "0.4.2"
 authors = ["Yannick Funk <yannickfunk@yahoo.de>"]
 edition = "2018"
 description = "Crate to create decks for the open source flashcard platform Anki. Based on Python library genanki"
@@ -22,6 +22,7 @@ thiserror = "1.0.57"
 once_cell = "1.19.0"
 log = "0.4"
 pyo3 = { version = "0.20.2", optional = true, features = ["macros"] }
+sha1 = "0.10.6"
 
 [dev-dependencies]
 anyhow = "1.0.79"

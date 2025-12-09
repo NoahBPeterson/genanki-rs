@@ -22,7 +22,7 @@ CREATE TABLE notes (
     usn             integer not null,      /* 4 */
     tags            text not null,         /* 5 */
     flds            text not null,         /* 6 */
-    sfld            text not null,         /* 7 */
+    sfld            integer not null,      /* 7 */
     csum            integer not null,      /* 8 */
     flags           integer not null,      /* 9 */
     data            text not null          /* 10 */
@@ -59,31 +59,32 @@ CREATE TABLE revlog (
     type            integer not null
 );
 CREATE TABLE graves (
-    usn             integer not null,
     oid             integer not null,
-    type            integer not null
+    type            integer not null,
+    usn             integer not null,
+    PRIMARY KEY (oid, type)
 );
 CREATE TABLE decks (
     id              integer primary key not null,
     name            text not null,
     mtime_secs      integer not null,
     usn             integer not null,
-    common          text not null, 
-    kind            text not null
+    common          blob not null, 
+    kind            blob not null
 );
 CREATE TABLE deck_config (
     id              integer primary key not null,
     name            text not null,
     mtime_secs      integer not null,
     usn             integer not null,
-    config          text not null
+    config          blob not null
 );
 CREATE TABLE notetypes (
     id              integer primary key not null,
     name            text not null,
     mtime_secs      integer not null,
     usn             integer not null,
-    config          text not null
+    config          blob not null
 );
 CREATE TABLE templates (
     ntid            integer not null,
@@ -91,21 +92,27 @@ CREATE TABLE templates (
     name            text not null,
     mtime_secs      integer not null,
     usn             integer not null,
-    config          text not null,
+    config          blob not null,
     PRIMARY KEY (ntid, ord)
 );
 CREATE TABLE fields (
     ntid            integer not null,
     ord             integer not null,
     name            text not null,
-    config          text not null,
+    config          blob not null,
     PRIMARY KEY (ntid, ord)
 );
 CREATE TABLE config (
-    key             text primary key not null,
+    "KEY"           text primary key not null,
     usn             integer not null,
     mtime_secs      integer not null,
     val             blob not null
+);
+CREATE TABLE tags (
+    tag             text not null primary key,
+    usn             integer not null,
+    collapsed       boolean not null default 0,
+    config          blob
 );
 CREATE INDEX ix_notes_usn on notes (usn);
 CREATE INDEX ix_cards_usn on cards (usn);

@@ -285,6 +285,8 @@ impl Package {
         transaction.execute_batch(APKG_SCHEMA).map_err(database_error)?;
 
         // Write config table entries
+        // NOTE: In new Anki schema, 'config' table is key-value. 'conf' column in 'col' is global config JSON.
+        // We populate the 'config' table if entries are provided, which some add-ons might use.
         for config_entry in &self.configs {
             transaction
                 .execute(
@@ -300,7 +302,24 @@ impl Package {
         }
 
         // Write deck_config table entries
+        // In 'col' table, 'dconf' column is a JSON map of deck configs.
+        // But newer Anki also uses 'deck_config' table. We write both for compatibility.
+        let mut dconf_map_for_col: HashMap<String, serde_json::Value> = HashMap::new();
+        
+        // First, populate default dconf
+        let default_dconf_json = "{\"1\": {\"autoplay\": true, \"id\": 1, \"lapse\": {\"delays\": [10], \"leechAction\": 0, \"leechFails\": 8, \"minInt\": 1, \"mult\": 0}, \"maxTaken\": 60, \"mod\": 0, \"name\": \"Default\", \"new\": {\"bury\": true, \"delays\": [1, 10], \"initialFactor\": 2500, \"ints\": [1, 4, 7], \"order\": 1, \"perDay\": 20, \"separate\": true}, \"replayq\": true, \"rev\": {\"bury\": true, \"ease4\": 1.3, \"fuzz\": 0.05, \"ivlFct\": 1, \"maxIvl\": 36500, \"minSpace\": 1, \"perDay\": 100}, \"timer\": 0, \"usn\": 0}}";
+        
+        // Try to parse default dconf string to initialize map
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(default_dconf_json) {
+            if let Some(obj) = val.as_object() {
+                for (k, v) in obj {
+                    dconf_map_for_col.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        
         for deck_config_entry in &self.deck_configs {
+            // Write to deck_config table
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO deck_config (id, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?)",
@@ -313,6 +332,11 @@ impl Package {
                     ],
                 )
                 .map_err(database_error)?;
+                
+            // Also add to dconf map for 'col' table
+            if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&deck_config_entry.config_blob) {
+                dconf_map_for_col.insert(deck_config_entry.id.to_string(), json_val);
+            }
         }
 
         // Create decks table (if it doesn't exist from APKG_SCHEMA - it usually doesn't define it explicitly)
@@ -399,7 +423,17 @@ impl Package {
                 }
             }
         }
-        let models_json_str = serde_json::to_string(&models_map_for_col).map_err(json_error)?;
+        // Also include manually added notetypes in col.models map if possible?
+        // genanki typically derives col.models from the notes present. 
+        // The `notetypes` table entries are separate but should technically match.
+        
+        let ver: i64 = 18; // Use schema 18 (latest for compatibility with normalized tables)
+
+        let models_json_str = if ver >= 16 {
+            "{}".to_string()
+        } else {
+            serde_json::to_string(&models_map_for_col).map_err(json_error)?
+        };
 
         let mut decks_map_for_col: HashMap<String, DeckDbEntry> = HashMap::new();
         for deck_item in &self.decks {
@@ -410,22 +444,50 @@ impl Package {
             let default_deck = Deck::new(1, "Default", "");
             decks_map_for_col.insert("1".to_string(), default_deck.to_deck_db_entry());
         }
-        let decks_json_str = serde_json::to_string(&decks_map_for_col).map_err(json_error)?;
+        let decks_json_str = if ver >= 16 {
+            "{}".to_string()
+        } else {
+            serde_json::to_string(&decks_map_for_col).map_err(json_error)?
+        };
         
         let default_conf_json = "{\"activeDecks\": [1], \"addToCur\": true, \"collapseTime\": 1200, \"curDeck\": 1, \"curModel\": \"1607392319\", \"dueCounts\": true, \"estTimes\": true, \"newBury\": true, \"newSpread\": 0, \"nextPos\": 1, \"sortBackwards\": false, \"sortType\": \"noteFld\", \"timeLim\": 0}";
-        let default_dconf_json = "{\"1\": {\"autoplay\": true, \"id\": 1, \"lapse\": {\"delays\": [10], \"leechAction\": 0, \"leechFails\": 8, \"minInt\": 1, \"mult\": 0}, \"maxTaken\": 60, \"mod\": 0, \"name\": \"Default\", \"new\": {\"bury\": true, \"delays\": [1, 10], \"initialFactor\": 2500, \"ints\": [1, 4, 7], \"order\": 1, \"perDay\": 20, \"separate\": true}, \"replayq\": true, \"rev\": {\"bury\": true, \"ease4\": 1.3, \"fuzz\": 0.05, \"ivlFct\": 1, \"maxIvl\": 36500, \"minSpace\": 1, \"perDay\": 100}, \"timer\": 0, \"usn\": 0}}";
+
+        // Use the config_entry if it exists in the package
+        let conf_val = if ver >= 16 {
+             "{}".to_string()
+        } else if let Some(conf_entry) = self.configs.iter().find(|c| c.key == "conf") {
+             std::str::from_utf8(&conf_entry.val).unwrap_or(default_conf_json).to_string()
+        } else {
+             default_conf_json.to_string()
+        };
+        
+        // Final dconf JSON string
+        let dconf_json_str = if ver >= 16 {
+            "{}".to_string()
+        } else {
+            serde_json::to_string(&dconf_map_for_col).map_err(json_error)?
+        };
+
+        // Use the tags entry if it exists in the package or a string field from col_tags
+        // Note: We don't currently have a separate tags table entry structure, but we can check config
+        let tags_val = if let Some(tags_entry) = self.configs.iter().find(|c| c.key == "tags") {
+            std::str::from_utf8(&tags_entry.val).unwrap_or("{}")
+        } else {
+            "{}"
+        };
 
         transaction.execute(
-            "INSERT INTO col (id, crt, mod, scm, ver, dty, usn, ls, conf, models, decks, dconf, tags) VALUES (NULL, ?, ?, ?, 11, 0, -1, 0, ?, ?, ?, ?, ?)",
+            "INSERT INTO col (id, crt, mod, scm, ver, dty, usn, ls, conf, models, decks, dconf, tags) VALUES (NULL, ?, ?, ?, ?, 0, -1, 0, ?, ?, ?, ?, ?)",
             params![
                 crt_val,
                 mod_val,
                 scm_val,
-                default_conf_json,
+                ver,
+                conf_val,
                 models_json_str,
                 decks_json_str,
-                default_dconf_json,
-                "{}"
+                dconf_json_str,
+                tags_val
             ],
         ).map_err(database_error)?;
         Ok(())
@@ -433,7 +495,9 @@ impl Package {
 
     fn write_deck_content_data(&mut self, transaction: &Transaction, timestamp_sec: f64) -> Result<(), Error> {
         let mut id_gen = ((timestamp_sec * 1000.0) as usize)..;
+        log::info!("Writing content for {} decks", self.decks.len());
         for deck in &mut self.decks {
+            log::info!("Writing content for deck {}: {} notes", deck.id, deck.notes().len());
             deck.write_notes_and_cards_to_db(&transaction, timestamp_sec, &mut id_gen)?;
         }
         Ok(())

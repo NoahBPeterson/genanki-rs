@@ -250,8 +250,7 @@ impl Model {
         })
     }
 
-    #[allow(dead_code)]
-    pub(super) fn to_json(&mut self, timestamp: f64, deck_id: i64) -> Result<String, Error> {
+    pub fn to_json(&mut self, timestamp: f64, deck_id: i64) -> Result<String, Error> {
         Ok(
             serde_json::to_string(&self.to_model_db_entry(timestamp, deck_id)?)
                 .map_err(json_error)?,

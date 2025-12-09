@@ -206,7 +206,11 @@ impl Note {
     }
 
     fn format_tags(&self) -> String {
-        format!(" {} ", self.tags.join(" "))
+        if self.tags.is_empty() {
+             "".to_string()
+        } else {
+             format!(" {} ", self.tags.join(" "))
+        }
     }
     pub(super) fn write_to_db(
         &self,
@@ -233,6 +237,19 @@ impl Note {
             id_gen.next().unwrap()
         };
 
+        // Checksum logic: Sha1 of first field
+        use sha1::{Sha1, Digest};
+        let csum = if !self.fields.is_empty() {
+            let mut hasher = Sha1::new();
+            hasher.update(self.fields[0].as_bytes());
+            let result = hasher.finalize();
+            // Take first 4 bytes as u32
+            let bytes: [u8; 4] = [result[0], result[1], result[2], result[3]];
+            u32::from_be_bytes(bytes)
+        } else {
+            0
+        };
+
         transaction
             .execute(
                 "INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?);",
@@ -245,7 +262,7 @@ impl Note {
                     self.format_tags(),   // TODO tags
                     self.format_fields(), // flds
                     sfld_value,           // sfld - text value of sort field
-                    0,                    // csum, can be ignored
+                    csum,                 // csum
                     0,                    // flags
                     "",                   // data
                 ],
