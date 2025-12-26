@@ -28,6 +28,7 @@ use crate::model::ModelType;
 ///         None,
 ///         None,
 ///         None,
+///         None,
 ///     );
 /// ```
 pub fn basic_model() -> Model {
@@ -44,6 +45,7 @@ pub fn basic_model() -> Model {
         Some(
             ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n",
         ),
+        None,
         None,
         None,
         None,
@@ -83,6 +85,7 @@ pub fn basic_model() -> Model {
 ///         None,
 ///         None,
 ///         None,
+///         None,
 ///     );
 /// ```
 pub fn basic_and_reversed_card_model() -> Model {
@@ -104,6 +107,7 @@ pub fn basic_and_reversed_card_model() -> Model {
         Some(
             ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n",
         ),
+        None,
         None,
         None,
         None,
@@ -144,6 +148,7 @@ pub fn basic_and_reversed_card_model() -> Model {
 ///         None,
 ///         None,
 ///         None,
+///         None,
 ///     );
 /// ```
 pub fn basic_optional_reversed_card_model() -> Model {
@@ -166,6 +171,7 @@ pub fn basic_optional_reversed_card_model() -> Model {
         Some(
             ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n",
         ),
+        None,
         None,
         None,
         None,
@@ -202,6 +208,7 @@ pub fn basic_optional_reversed_card_model() -> Model {
 ///         None,
 ///         None,
 ///         None,
+///         None,
 ///     );
 /// ```
 pub fn basic_type_in_the_answer_model() -> Model {
@@ -220,6 +227,7 @@ pub fn basic_type_in_the_answer_model() -> Model {
         Some(
             ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n",
         ),
+        None,
         None,
         None,
         None,
@@ -249,10 +257,10 @@ pub fn basic_type_in_the_answer_model() -> Model {
 ///                 .afmt("{{cloze:Text}}"),
 ///         ],
 ///         Some(
-///             ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n\n \
-///              .cloze {\n font-weight: bold;\n color: blue;\n}\n.nightMode .cloze {\n color: lightblue;\n}",
+///             ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n\n .cloze {\n font-weight: bold;\n color: blue;\n}\n.nightMode .cloze {\n color: lightblue;\n}",
 ///         ),
 ///         Some(ModelType::Cloze),
+///         None,
 ///         None,
 ///         None,
 ///         None,
@@ -271,10 +279,10 @@ pub fn cloze_model() -> Model {
                 .afmt("{{cloze:Text}}"),
         ],
         Some(
-            ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n\n \
-             .cloze {\n font-weight: bold;\n color: blue;\n}\n.nightMode .cloze {\n color: lightblue;\n}",
+            ".card {\n font-family: arial;\n font-size: 20px;\n text-align: center;\n color: black;\n background-color: white;\n}\n\n .cloze {\n font-weight: bold;\n color: blue;\n}\n.nightMode .cloze {\n color: lightblue;\n}",
         ),
         Some(ModelType::Cloze),
+        None,
         None,
         None,
         None,

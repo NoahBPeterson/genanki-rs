@@ -1,19 +1,18 @@
 use super::Package;
-use crate::db_entries::{DeckDbEntry, ModelDbEntry};
-use crate::error::{database_error, json_error};
+use crate::db_entries::{DeckDbEntry};
 use crate::model::Model;
 use crate::note::Note;
 use crate::Error;
-use rusqlite::{params, Transaction};
+use rusqlite::{Transaction};
 use std::collections::HashMap;
 use std::ops::RangeFrom;
 
 /// A flashcard deck which can be written into an .apkg file.
 #[derive(Clone)]
 pub struct Deck {
-    id: i64,
-    name: String,
-    description: String,
+    pub id: i64,
+    pub name: String,
+    pub description: String,
     notes: Vec<Note>,
     models: HashMap<i64, Model>,
 }
@@ -46,25 +45,33 @@ impl Deck {
         self.notes.push(note);
     }
 
-    fn add_model(&mut self, model: Model) {
+    pub(crate) fn add_model(&mut self, model: Model) {
         self.models.insert(model.id, model);
     }
 
-    fn to_deck_db_entry(&self) -> DeckDbEntry {
+    pub(crate) fn notes(&self) -> &Vec<Note> {
+        &self.notes
+    }
+
+    pub(crate) fn models(&self) -> &HashMap<i64, Model> {
+        &self.models
+    }
+
+    pub(crate) fn to_deck_db_entry(&self) -> DeckDbEntry {
         DeckDbEntry {
             collapsed: false,
             conf: 1,
             desc: self.description.clone(),
             deck_db_entry_dyn: 0,
-            extend_new: 0,
+            extend_new: 10,
             extend_rev: 50,
-            id: self.id.clone(),
-            lrn_today: vec![163, 2],
-            deck_db_entry_mod: 1425278051,
+            id: self.id,
+            lrn_today: vec![0, 0],
+            deck_db_entry_mod: 0,
             name: self.name.clone(),
-            new_today: vec![163, 2],
-            rev_today: vec![163, 0],
-            time_today: vec![163, 23598],
+            new_today: vec![0, 0],
+            rev_today: vec![0, 0],
+            time_today: vec![0, 0],
             usn: -1,
         }
     }
@@ -75,43 +82,13 @@ impl Deck {
         serde_json::to_string(&db_entry).expect("Should always serialize")
     }
 
-    pub(super) fn write_to_db(
-        &mut self,
+    pub(crate) fn write_notes_and_cards_to_db(
+        &self,
         transaction: &Transaction,
         timestamp: f64,
         id_gen: &mut RangeFrom<usize>,
     ) -> Result<(), Error> {
-        let decks_json_str: String = transaction
-            .query_row("SELECT decks FROM col", [], |row| row.get(0))
-            .map_err(database_error)?;
-        let mut decks: HashMap<i64, DeckDbEntry> =
-            serde_json::from_str(&decks_json_str).map_err(json_error)?;
-        decks.insert(self.id, self.to_deck_db_entry());
-        transaction
-            .execute(
-                "UPDATE col SET decks = ?",
-                params![serde_json::to_string(&decks).map_err(json_error)?],
-            )
-            .map_err(database_error)?;
-
-        let models_json_str: String = transaction
-            .query_row("SELECT models FROM col", [], |row| row.get(0))
-            .map_err(database_error)?;
-        let mut models: HashMap<i64, ModelDbEntry> =
-            serde_json::from_str(&models_json_str).map_err(json_error)?;
-        for note in self.notes.clone().iter() {
-            self.add_model(note.model());
-        }
-        for (i, model) in &mut self.models {
-            models.insert(*i, model.to_model_db_entry(timestamp, self.id)?);
-        }
-        transaction
-            .execute(
-                "UPDATE col SET models = ?",
-                [serde_json::to_string(&models).map_err(json_error)?],
-            )
-            .map_err(database_error)?;
-        for note in &mut self.notes {
+        for note in &self.notes {
             note.write_to_db(&transaction, timestamp, self.id, id_gen)?;
         }
         Ok(())

@@ -29,6 +29,15 @@ pub enum ModelType {
     Cloze,
 }
 
+impl ModelType {
+    pub fn to_i64(&self) -> i64 {
+        match self {
+            ModelType::FrontBack => 0,
+            ModelType::Cloze => 1,
+        }
+    }
+}
+
 /// `Model` to determine the structure of a `Note`
 #[derive(Clone)]
 pub struct Model {
@@ -41,6 +50,7 @@ pub struct Model {
     latex_pre: String,
     latex_post: String,
     sort_field_index: i64,
+    latex_svg: bool,
     sentinel_regexes: Arc<Vec<Regex>>, // Arc<_> so this can be clone and Sync
 }
 
@@ -71,6 +81,7 @@ impl Model {
             latex_pre: DEFAULT_LATEX_PRE.to_string(),
             latex_post: DEFAULT_LATEX_POST.to_string(),
             sort_field_index: 0,
+            latex_svg: false,
             sentinel_regexes: compile_sentinel_regexes(&fields),
         }
     }
@@ -81,6 +92,7 @@ impl Model {
     /// * `latex_pre`: Custom latex declarations at the beginning of a card.
     /// * `latex_post`: Custom latex declarations at the end of a card.
     /// * `sort_field_index`: Custom sort field index
+    /// * `latex_svg`: Whether to include LaTeX SVG in the model
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_options(
         id: i64,
@@ -92,6 +104,7 @@ impl Model {
         latex_pre: Option<&str>,
         latex_post: Option<&str>,
         sort_field_index: Option<i64>,
+        latex_svg: Option<bool>,
     ) -> Self {
         Self {
             id,
@@ -103,6 +116,7 @@ impl Model {
             latex_pre: latex_pre.unwrap_or(DEFAULT_LATEX_PRE).to_string(),
             latex_post: latex_post.unwrap_or(DEFAULT_LATEX_POST).to_string(),
             sort_field_index: sort_field_index.unwrap_or(0),
+            latex_svg: latex_svg.unwrap_or(false),
             sentinel_regexes: compile_sentinel_regexes(&fields),
         }
     }
@@ -156,7 +170,7 @@ impl Model {
         }
     }
 
-    pub(super) fn req(&self) -> Result<Vec<(usize, String, Vec<usize>)>, Error> {
+    pub fn req(&self) -> Result<Vec<(usize, String, Vec<usize>)>, Error> {
         let field_names: Vec<String> = self.fields.iter().map(|field| field.name.clone()).collect();
         let field_values = field_names
             .iter()
@@ -190,10 +204,10 @@ impl Model {
         Ok(req)
     }
 
-    pub(super) fn fields(&self) -> Vec<Fld> {
+    pub fn fields(&self) -> Vec<Fld> {
         self.fields.clone()
     }
-    pub(super) fn templates(&self) -> Vec<Tmpl> {
+    pub fn templates(&self) -> Vec<Tmpl> {
         self.templates.clone()
     }
     pub(super) fn get_model_type(&self) -> ModelType {
@@ -230,14 +244,13 @@ impl Model {
             model_db_entry_mod: timestamp as i64,
             latex_post: self.latex_post.clone(),
             model_db_entry_type: model_type,
-            id: self.id.to_string(),
+            id: self.id,
             css: self.css.clone(),
             latex_pre: self.latex_pre.clone(),
         })
     }
 
-    #[allow(dead_code)]
-    pub(super) fn to_json(&mut self, timestamp: f64, deck_id: i64) -> Result<String, Error> {
+    pub fn to_json(&mut self, timestamp: f64, deck_id: i64) -> Result<String, Error> {
         Ok(
             serde_json::to_string(&self.to_model_db_entry(timestamp, deck_id)?)
                 .map_err(json_error)?,
@@ -247,6 +260,14 @@ impl Model {
     fn contains_other_fields(&self, rendered: &str, field_ord: usize) -> bool {
         self.sentinel_regexes[field_ord].is_match(rendered).unwrap()
     }
+
+    pub fn name(&self) -> &str { &self.name }
+    pub fn get_css(&self) -> &str { &self.css }
+    pub fn latex_pre_str(&self) -> &str { &self.latex_pre }
+    pub fn latex_post_str(&self) -> &str { &self.latex_post }
+    pub fn sort_field_idx(&self) -> i64 { self.sort_field_index }
+    pub fn get_latex_svg(&self) -> bool { self.latex_svg }
+    pub fn model_type_val(&self) -> ModelType { self.model_type.clone() }
 }
 
 fn compile_sentinel_regexes(fields: &[Field]) -> Arc<Vec<Regex>> {
@@ -305,6 +326,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -318,6 +340,7 @@ mod tests {
                 .afmt("{{cloze:Text1}} and {{cloze:Text2}}")],
             Some(&css()),
             Some(ModelType::Cloze),
+            None,
             None,
             None,
             None,

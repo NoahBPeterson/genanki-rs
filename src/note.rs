@@ -31,7 +31,10 @@ pub struct Note {
     sort_field: bool,
     tags: Vec<String>,
     guid: String,
+    pub(crate) id: Option<i64>,
     cards: Vec<Card>,
+    sfld_override: Option<String>,
+    csum_override: Option<i64>,
 }
 
 impl Note {
@@ -58,7 +61,10 @@ impl Note {
             sort_field: false,
             tags: vec![],
             guid,
+            id: None,
             cards,
+            sfld_override: None,
+            csum_override: None,
         })
     }
 
@@ -93,7 +99,10 @@ impl Note {
             sort_field: sort_field.unwrap_or(false),
             tags,
             guid,
+            id: None,
             cards,
+            sfld_override: None,
+            csum_override: None,
         })
     }
 
@@ -124,6 +133,61 @@ impl Note {
             guid: guid.to_string(),
             ..self
         }
+    }
+
+    /// Sets the ID for this note
+    pub fn set_id(mut self, id: i64) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    /// Sets a custom sort field value (sfld) for this note
+    ///
+    /// By default, sfld is computed from the sort field index in the model.
+    /// Use this method to override with a specific value (e.g., when preserving Anki exports).
+    pub fn set_sfld(mut self, sfld: impl ToString) -> Self {
+        self.sfld_override = Some(sfld.to_string());
+        self
+    }
+
+    /// Sets a custom checksum (csum) for this note
+    ///
+    /// By default, csum is computed from the first field using SHA1.
+    /// Use this method to override with a specific value (e.g., when preserving Anki exports).
+    pub fn set_csum(mut self, csum: i64) -> Self {
+        self.csum_override = Some(csum);
+        self
+    }
+
+    /// Creates a Note with custom cards that include review data
+    /// This is useful for preserving Anki review history when exporting
+    pub fn new_with_cards(
+        model: Model, 
+        fields: Vec<&str>,
+        cards: Vec<Card>,
+        guid: Option<&str>,
+        tags: Option<Vec<&str>>,
+    ) -> Result<Self, Error> {
+        let fields = fields.iter().map(|&s| s.to_string()).collect();
+        let tags = tags
+            .unwrap_or_default()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        validate_tags(&tags)?;
+        let guid = guid.unwrap_or(&guid_for(&fields)).to_string();
+        
+        Ok(Self {
+            model,
+            fields,
+            sort_field: false,
+            tags,
+            guid,
+            id: None,
+            cards,
+            sfld_override: None,
+            csum_override: None,
+        })
     }
 
     pub(super) fn model(&self) -> Model {
@@ -168,7 +232,11 @@ impl Note {
     }
 
     fn format_tags(&self) -> String {
-        format!(" {} ", self.tags.join(" "))
+        if self.tags.is_empty() {
+             "".to_string()
+        } else {
+             format!(" {} ", self.tags.join(" "))
+        }
     }
     pub(super) fn write_to_db(
         &self,
@@ -179,25 +247,66 @@ impl Note {
     ) -> Result<(), Error> {
         self.check_number_model_fields_matches_num_fields()?;
         self.check_invalid_html_tags_in_fields()?;
+        // sfld should be the text value of the sort field (defaults to first field)
+        // Use override if present (for preserving original Anki values)
+        let computed_sfld;
+        let sfld_value = if let Some(ref override_val) = self.sfld_override {
+            override_val.as_str()
+        } else {
+            let sort_field_idx = self.model.sort_field_idx() as usize;
+            computed_sfld = if sort_field_idx < self.fields.len() {
+                self.fields[sort_field_idx].clone()
+            } else if !self.fields.is_empty() {
+                self.fields[0].clone() // fallback to first field if index is out of bounds
+            } else {
+                String::new()
+            };
+            &computed_sfld
+        };
+        
+        let note_id = if let Some(id) = self.id {
+            id as usize
+        } else {
+            id_gen.next().unwrap()
+        };
+
+        // Checksum logic: Use override if present, otherwise compute from first field
+        let csum: i64 = if let Some(override_csum) = self.csum_override {
+            override_csum
+        } else {
+            // Compute checksum from first field using Sha1
+            use sha1::{Sha1, Digest};
+            if !self.fields.is_empty() {
+                let mut hasher = Sha1::new();
+                hasher.update(self.fields[0].as_bytes());
+                let result = hasher.finalize();
+                // Take first 4 bytes as u32
+                let bytes: [u8; 4] = [result[0], result[1], result[2], result[3]];
+                u32::from_be_bytes(bytes) as i64
+            } else {
+                0
+            }
+        };
+
         transaction
             .execute(
                 "INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?);",
                 params![
-                    id_gen.next(),        // id
+                    note_id,              // id
                     self.get_guid(),      // guid
                     self.model.id,        // mid
                     timestamp as i64,     // mod
                     -1,                   // usn
                     self.format_tags(),   // TODO tags
                     self.format_fields(), // flds
-                    self.sort_field,      // sfld
-                    0,                    // csum, can be ignored
+                    sfld_value,           // sfld - text value of sort field
+                    csum,                 // csum
                     0,                    // flags
                     "",                   // data
                 ],
             )
             .map_err(database_error)?;
-        let note_id = transaction.last_insert_rowid() as usize;
+        // let note_id = transaction.last_insert_rowid() as usize; // We already know note_id
         for card in &self.cards {
             card.write_to_db(transaction, timestamp, deck_id, note_id, &mut id_gen)?
         }
