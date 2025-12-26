@@ -9,7 +9,7 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use log::info;
 
-use crate::apkg_schema::{APKG_SCHEMA, APKG_SCHEMA_FIELDS};
+use crate::apkg_schema::{APKG_SCHEMA, APKG_SCHEMA_V11, APKG_SCHEMA_FIELDS};
 use crate::apkg_col::APKG_COL;
 use crate::deck::Deck;
 use crate::error::{database_error, json_error, zip_error};
@@ -135,6 +135,15 @@ pub struct Package {
     notetypes: Vec<NotetypeEntry>,
     field_entries: Vec<FieldEntry>,
     template_entries: Vec<TemplateEntry>,
+    // Custom col table overrides for preserving original Anki data
+    col_crt: Option<i64>,
+    col_ver: Option<i64>,
+    col_scm: Option<i64>,
+    col_usn: Option<i32>,
+    col_conf: Option<String>,
+    col_models: Option<String>,
+    col_decks: Option<String>,
+    col_dconf: Option<String>,
 }
 
 impl Package {
@@ -146,7 +155,24 @@ impl Package {
             .iter()
             .map(|s| PathBuf::from_str(s.as_str()).map(|p| MediaFile::Path(p)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { decks, media_files, configs: Vec::new(), deck_configs: Vec::new(), deck_infos: Vec::new(), notetypes: Vec::new(), field_entries: Vec::new(), template_entries: Vec::new() })
+        Ok(Self {
+            decks,
+            media_files,
+            configs: Vec::new(),
+            deck_configs: Vec::new(),
+            deck_infos: Vec::new(),
+            notetypes: Vec::new(),
+            field_entries: Vec::new(),
+            template_entries: Vec::new(),
+            col_crt: None,
+            col_ver: None,
+            col_scm: None,
+            col_usn: None,
+            col_conf: None,
+            col_models: None,
+            col_decks: None,
+            col_dconf: None,
+        })
     }
 
     /// Adds a configuration entry to the package.
@@ -157,6 +183,28 @@ impl Package {
     /// Adds a deck configuration entry to the package.
     pub fn add_deck_config_entry(&mut self, entry: DeckConfigEntry) {
         self.deck_configs.push(entry);
+    }
+
+    /// Sets custom col table data to preserve original Anki metadata during export
+    pub fn set_col_data(
+        &mut self,
+        crt: Option<i64>,
+        ver: Option<i64>,
+        scm: Option<i64>,
+        usn: Option<i32>,
+        conf: Option<String>,
+        models: Option<String>,
+        decks: Option<String>,
+        dconf: Option<String>,
+    ) {
+        self.col_crt = crt;
+        self.col_ver = ver;
+        self.col_scm = scm;
+        self.col_usn = usn;
+        self.col_conf = conf;
+        self.col_models = models;
+        self.col_decks = decks;
+        self.col_dconf = dconf;
     }
 
     /// Adds a deck info entry to the package.
@@ -184,7 +232,24 @@ impl Package {
     /// 
     /// Returns `Err` if `media_files` are invalid
     pub fn new_from_memory(decks: Vec<Deck>, media_files: Vec<MediaFile>) -> Result<Self, Error> {
-        Ok(Self { decks, media_files, configs: Vec::new(), deck_configs: Vec::new(), deck_infos: Vec::new(), notetypes: Vec::new(), field_entries: Vec::new(), template_entries: Vec::new() })
+        Ok(Self {
+            decks,
+            media_files,
+            configs: Vec::new(),
+            deck_configs: Vec::new(),
+            deck_infos: Vec::new(),
+            notetypes: Vec::new(),
+            field_entries: Vec::new(),
+            template_entries: Vec::new(),
+            col_crt: None,
+            col_ver: None,
+            col_scm: None,
+            col_usn: None,
+            col_conf: None,
+            col_models: None,
+            col_decks: None,
+            col_dconf: None,
+        })
     }
 
     /// Writes the package to any writer that implements Write and Seek
@@ -282,12 +347,64 @@ impl Package {
     }
 
     fn write_schema_and_col_table(&self, transaction: &Transaction, timestamp_sec: f64) -> Result<(), Error> {
-        transaction.execute_batch(APKG_SCHEMA).map_err(database_error)?;
+        // Determine version early to use for conditional schema creation
+        let ver: i64 = self.col_ver.unwrap_or(18);
 
-        // Write config table entries
-        // NOTE: In new Anki schema, 'config' table is key-value. 'conf' column in 'col' is global config JSON.
-        // We populate the 'config' table if entries are provided, which some add-ons might use.
-        for config_entry in &self.configs {
+        // Use version-appropriate schema
+        if ver < 12 {
+            // Anki 2.0 (version 11 and below) - minimal tables only
+            transaction.execute_batch(APKG_SCHEMA_V11).map_err(database_error)?;
+        } else {
+            // Anki 2.1 (version 12+) - includes all modern tables
+            transaction.execute_batch(APKG_SCHEMA).map_err(database_error)?;
+        }
+
+        // Create graves table with version-appropriate schema
+        if ver >= 18 {
+            // Anki 2.1 v18+ schema: includes PRIMARY KEY
+            transaction.execute(
+                "CREATE TABLE graves (
+                    oid             integer not null,
+                    type            integer not null,
+                    usn             integer not null,
+                    PRIMARY KEY (oid, type)
+                )",
+                [],
+            ).map_err(database_error)?;
+        } else {
+            // Anki 2.0 v11 schema: no PRIMARY KEY
+            transaction.execute(
+                "CREATE TABLE graves (
+                    usn             integer not null,
+                    oid             integer not null,
+                    type            integer not null
+                )",
+                [],
+            ).map_err(database_error)?;
+        }
+
+        // Initialize dconf_map_for_col before version check (needed for col table later)
+        // In 'col' table, 'dconf' column is a JSON map of deck configs.
+        let mut dconf_map_for_col: HashMap<String, serde_json::Value> = HashMap::new();
+
+        // First, populate default dconf
+        let default_dconf_json = "{\"1\": {\"autoplay\": true, \"id\": 1, \"lapse\": {\"delays\": [10], \"leechAction\": 0, \"leechFails\": 8, \"minInt\": 1, \"mult\": 0}, \"maxTaken\": 60, \"mod\": 0, \"name\": \"Default\", \"new\": {\"bury\": true, \"delays\": [1, 10], \"initialFactor\": 2500, \"ints\": [1, 4, 7], \"order\": 1, \"perDay\": 20, \"separate\": true}, \"replayq\": true, \"rev\": {\"bury\": true, \"ease4\": 1.3, \"fuzz\": 0.05, \"ivlFct\": 1, \"maxIvl\": 36500, \"minSpace\": 1, \"perDay\": 100}, \"timer\": 0, \"usn\": 0}}";
+
+        // Try to parse default dconf string to initialize map
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(default_dconf_json) {
+            if let Some(obj) = val.as_object() {
+                for (k, v) in obj {
+                    dconf_map_for_col.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        // Only create and populate v12+ tables for Anki 2.1 (version 12+)
+        if ver >= 12 {
+            // Write config table entries
+            // NOTE: In new Anki schema, 'config' table is key-value. 'conf' column in 'col' is global config JSON.
+            // We populate the 'config' table if entries are provided, which some add-ons might use.
+            for config_entry in &self.configs {
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO config (key, usn, mtime_secs, val) VALUES (?, ?, ?, ?)",
@@ -302,22 +419,7 @@ impl Package {
         }
 
         // Write deck_config table entries
-        // In 'col' table, 'dconf' column is a JSON map of deck configs.
         // But newer Anki also uses 'deck_config' table. We write both for compatibility.
-        let mut dconf_map_for_col: HashMap<String, serde_json::Value> = HashMap::new();
-        
-        // First, populate default dconf
-        let default_dconf_json = "{\"1\": {\"autoplay\": true, \"id\": 1, \"lapse\": {\"delays\": [10], \"leechAction\": 0, \"leechFails\": 8, \"minInt\": 1, \"mult\": 0}, \"maxTaken\": 60, \"mod\": 0, \"name\": \"Default\", \"new\": {\"bury\": true, \"delays\": [1, 10], \"initialFactor\": 2500, \"ints\": [1, 4, 7], \"order\": 1, \"perDay\": 20, \"separate\": true}, \"replayq\": true, \"rev\": {\"bury\": true, \"ease4\": 1.3, \"fuzz\": 0.05, \"ivlFct\": 1, \"maxIvl\": 36500, \"minSpace\": 1, \"perDay\": 100}, \"timer\": 0, \"usn\": 0}}";
-        
-        // Try to parse default dconf string to initialize map
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(default_dconf_json) {
-            if let Some(obj) = val.as_object() {
-                for (k, v) in obj {
-                    dconf_map_for_col.insert(k.clone(), v.clone());
-                }
-            }
-        }
-        
         for deck_config_entry in &self.deck_configs {
             // Write to deck_config table
             transaction
@@ -367,56 +469,58 @@ impl Package {
             ).map_err(database_error)?; // Ensure this uses map_err(database_error)
         }
 
-        // Create notetypes table (Anki schema)
-        transaction.execute(
-            "CREATE TABLE IF NOT EXISTS notetypes (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                mtime_secs INTEGER NOT NULL,
-                usn INTEGER NOT NULL,
-                config BLOB NOT NULL
-            )",
-            [],
-        ).map_err(database_error)?;
-
-        // Insert notetype entries
-        for notetype_entry in &self.notetypes {
+            // Create notetypes table (Anki schema)
             transaction.execute(
-                "INSERT INTO notetypes (id, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?)",
-                params![
-                    notetype_entry.id,
-                    notetype_entry.name,
-                    notetype_entry.mtime_secs,
-                    notetype_entry.usn,
-                    notetype_entry.config,
-                ],
+                "CREATE TABLE IF NOT EXISTS notetypes (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    mtime_secs INTEGER NOT NULL,
+                    usn INTEGER NOT NULL,
+                    config BLOB NOT NULL
+                )",
+                [],
             ).map_err(database_error)?;
-        }
-        info!("Wrote {} entries to notetypes table.", self.notetypes.len());
 
-        // Create fields table and insert data
-        transaction.execute_batch(APKG_SCHEMA_FIELDS).map_err(database_error)?;
-        let mut stmt_fields = transaction.prepare("INSERT INTO fields (ntid, ord, name, config) VALUES (?, ?, ?, ?)").map_err(database_error)?;
-        for entry in &self.field_entries {
-            stmt_fields.execute(params![entry.ntid, entry.ord, entry.name, entry.config]).map_err(database_error)?;
-        }
-        info!("Wrote {} entries to fields table.", self.field_entries.len());
+            // Insert notetype entries
+            for notetype_entry in &self.notetypes {
+                transaction.execute(
+                    "INSERT INTO notetypes (id, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?)",
+                    params![
+                        notetype_entry.id,
+                        notetype_entry.name,
+                        notetype_entry.mtime_secs,
+                        notetype_entry.usn,
+                        notetype_entry.config,
+                    ],
+                ).map_err(database_error)?;
+            }
+            info!("Wrote {} entries to notetypes table.", self.notetypes.len());
 
-        // Create templates table and insert data (CREATE TABLE is in APKG_SCHEMA)
-        let mut stmt_templates = transaction.prepare("INSERT INTO templates (ntid, ord, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?, ?)").map_err(database_error)?;
-        for entry in &self.template_entries {
-            stmt_templates.execute(params![entry.ntid, entry.ord, entry.name, entry.mtime_secs, entry.usn, entry.config]).map_err(database_error)?;
-        }
-        info!("Wrote {} entries to templates table.", self.template_entries.len());
+            // Create fields table and insert data
+            transaction.execute_batch(APKG_SCHEMA_FIELDS).map_err(database_error)?;
+            let mut stmt_fields = transaction.prepare("INSERT INTO fields (ntid, ord, name, config) VALUES (?, ?, ?, ?)").map_err(database_error)?;
+            for entry in &self.field_entries {
+                stmt_fields.execute(params![entry.ntid, entry.ord, entry.name, entry.config]).map_err(database_error)?;
+            }
+            info!("Wrote {} entries to fields table.", self.field_entries.len());
 
-        let crt_val = timestamp_sec as i64;
+            // Create templates table and insert data (CREATE TABLE is in APKG_SCHEMA)
+            let mut stmt_templates = transaction.prepare("INSERT INTO templates (ntid, ord, name, mtime_secs, usn, config) VALUES (?, ?, ?, ?, ?, ?)").map_err(database_error)?;
+            for entry in &self.template_entries {
+                stmt_templates.execute(params![entry.ntid, entry.ord, entry.name, entry.mtime_secs, entry.usn, entry.config]).map_err(database_error)?;
+            }
+            info!("Wrote {} entries to templates table.", self.template_entries.len());
+        } // End of version >= 12 block
+
+        // Use custom col data if provided, otherwise compute defaults
+        let crt_val = self.col_crt.unwrap_or_else(|| timestamp_sec as i64);
         let mod_val = (timestamp_sec * 1000.0) as i64;
-        let scm_val = mod_val;
+        let scm_val = self.col_scm.unwrap_or(mod_val);
 
         let mut models_map_for_col: HashMap<String, ModelDbEntry> = HashMap::new();
         for deck_item in &self.decks {
-            for note in deck_item.notes() { 
-                let mut model_clone = note.model().clone(); 
+            for note in deck_item.notes() {
+                let mut model_clone = note.model().clone();
                 let model_id_str = model_clone.id.to_string();
                 if !models_map_for_col.contains_key(&model_id_str) {
                     models_map_for_col.insert(model_id_str, model_clone.to_model_db_entry(timestamp_sec, deck_item.id)?);
@@ -424,12 +528,15 @@ impl Package {
             }
         }
         // Also include manually added notetypes in col.models map if possible?
-        // genanki typically derives col.models from the notes present. 
+        // genanki typically derives col.models from the notes present.
         // The `notetypes` table entries are separate but should technically match.
-        
-        let ver: i64 = 18; // Use schema 18 (latest for compatibility with normalized tables)
 
-        let models_json_str = if ver >= 16 {
+        // Note: ver was already determined at the start of this method for graves table schema
+
+        // Use custom models JSON if provided, otherwise compute from decks
+        let models_json_str = if let Some(ref custom_models) = self.col_models {
+            custom_models.clone()
+        } else if ver >= 16 {
             "{}".to_string()
         } else {
             serde_json::to_string(&models_map_for_col).map_err(json_error)?
@@ -439,12 +546,16 @@ impl Package {
         for deck_item in &self.decks {
             decks_map_for_col.insert(deck_item.id.to_string(), deck_item.to_deck_db_entry());
         }
-        
+
         if !decks_map_for_col.contains_key("1") {
             let default_deck = Deck::new(1, "Default", "");
             decks_map_for_col.insert("1".to_string(), default_deck.to_deck_db_entry());
         }
-        let decks_json_str = if ver >= 16 {
+
+        // Use custom decks JSON if provided, otherwise compute from decks
+        let decks_json_str = if let Some(ref custom_decks) = self.col_decks {
+            custom_decks.clone()
+        } else if ver >= 16 {
             "{}".to_string()
         } else {
             serde_json::to_string(&decks_map_for_col).map_err(json_error)?
@@ -452,17 +563,21 @@ impl Package {
         
         let default_conf_json = "{\"activeDecks\": [1], \"addToCur\": true, \"collapseTime\": 1200, \"curDeck\": 1, \"curModel\": \"1607392319\", \"dueCounts\": true, \"estTimes\": true, \"newBury\": true, \"newSpread\": 0, \"nextPos\": 1, \"sortBackwards\": false, \"sortType\": \"noteFld\", \"timeLim\": 0}";
 
-        // Use the config_entry if it exists in the package
-        let conf_val = if ver >= 16 {
+        // Use custom conf if provided, otherwise use config_entry or default
+        let conf_val = if let Some(ref custom_conf) = self.col_conf {
+            custom_conf.clone()
+        } else if ver >= 16 {
              "{}".to_string()
         } else if let Some(conf_entry) = self.configs.iter().find(|c| c.key == "conf") {
              std::str::from_utf8(&conf_entry.val).unwrap_or(default_conf_json).to_string()
         } else {
              default_conf_json.to_string()
         };
-        
-        // Final dconf JSON string
-        let dconf_json_str = if ver >= 16 {
+
+        // Use custom dconf if provided, otherwise compute from deck configs
+        let dconf_json_str = if let Some(ref custom_dconf) = self.col_dconf {
+            custom_dconf.clone()
+        } else if ver >= 16 {
             "{}".to_string()
         } else {
             serde_json::to_string(&dconf_map_for_col).map_err(json_error)?
@@ -476,13 +591,17 @@ impl Package {
             "{}"
         };
 
+        // Use custom usn if provided, otherwise default to -1 (needs upload)
+        let usn_val = self.col_usn.unwrap_or(-1);
+
         transaction.execute(
-            "INSERT INTO col (id, crt, mod, scm, ver, dty, usn, ls, conf, models, decks, dconf, tags) VALUES (NULL, ?, ?, ?, ?, 0, -1, 0, ?, ?, ?, ?, ?)",
+            "INSERT INTO col (id, crt, mod, scm, ver, dty, usn, ls, conf, models, decks, dconf, tags) VALUES (NULL, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?)",
             params![
                 crt_val,
                 mod_val,
                 scm_val,
                 ver,
+                usn_val,
                 conf_val,
                 models_json_str,
                 decks_json_str,

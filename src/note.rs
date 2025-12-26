@@ -33,6 +33,8 @@ pub struct Note {
     guid: String,
     pub(crate) id: Option<i64>,
     cards: Vec<Card>,
+    sfld_override: Option<String>,
+    csum_override: Option<i64>,
 }
 
 impl Note {
@@ -61,6 +63,8 @@ impl Note {
             guid,
             id: None,
             cards,
+            sfld_override: None,
+            csum_override: None,
         })
     }
 
@@ -97,6 +101,8 @@ impl Note {
             guid,
             id: None,
             cards,
+            sfld_override: None,
+            csum_override: None,
         })
     }
 
@@ -135,6 +141,24 @@ impl Note {
         self
     }
 
+    /// Sets a custom sort field value (sfld) for this note
+    ///
+    /// By default, sfld is computed from the sort field index in the model.
+    /// Use this method to override with a specific value (e.g., when preserving Anki exports).
+    pub fn set_sfld(mut self, sfld: impl ToString) -> Self {
+        self.sfld_override = Some(sfld.to_string());
+        self
+    }
+
+    /// Sets a custom checksum (csum) for this note
+    ///
+    /// By default, csum is computed from the first field using SHA1.
+    /// Use this method to override with a specific value (e.g., when preserving Anki exports).
+    pub fn set_csum(mut self, csum: i64) -> Self {
+        self.csum_override = Some(csum);
+        self
+    }
+
     /// Creates a Note with custom cards that include review data
     /// This is useful for preserving Anki review history when exporting
     pub fn new_with_cards(
@@ -161,6 +185,8 @@ impl Note {
             guid,
             id: None,
             cards,
+            sfld_override: None,
+            csum_override: None,
         })
     }
 
@@ -222,13 +248,20 @@ impl Note {
         self.check_number_model_fields_matches_num_fields()?;
         self.check_invalid_html_tags_in_fields()?;
         // sfld should be the text value of the sort field (defaults to first field)
-        let sort_field_idx = self.model.sort_field_idx() as usize;
-        let sfld_value = if sort_field_idx < self.fields.len() {
-            &self.fields[sort_field_idx]
-        } else if !self.fields.is_empty() {
-            &self.fields[0] // fallback to first field if index is out of bounds
+        // Use override if present (for preserving original Anki values)
+        let computed_sfld;
+        let sfld_value = if let Some(ref override_val) = self.sfld_override {
+            override_val.as_str()
         } else {
-            ""
+            let sort_field_idx = self.model.sort_field_idx() as usize;
+            computed_sfld = if sort_field_idx < self.fields.len() {
+                self.fields[sort_field_idx].clone()
+            } else if !self.fields.is_empty() {
+                self.fields[0].clone() // fallback to first field if index is out of bounds
+            } else {
+                String::new()
+            };
+            &computed_sfld
         };
         
         let note_id = if let Some(id) = self.id {
@@ -237,17 +270,22 @@ impl Note {
             id_gen.next().unwrap()
         };
 
-        // Checksum logic: Sha1 of first field
-        use sha1::{Sha1, Digest};
-        let csum = if !self.fields.is_empty() {
-            let mut hasher = Sha1::new();
-            hasher.update(self.fields[0].as_bytes());
-            let result = hasher.finalize();
-            // Take first 4 bytes as u32
-            let bytes: [u8; 4] = [result[0], result[1], result[2], result[3]];
-            u32::from_be_bytes(bytes)
+        // Checksum logic: Use override if present, otherwise compute from first field
+        let csum: i64 = if let Some(override_csum) = self.csum_override {
+            override_csum
         } else {
-            0
+            // Compute checksum from first field using Sha1
+            use sha1::{Sha1, Digest};
+            if !self.fields.is_empty() {
+                let mut hasher = Sha1::new();
+                hasher.update(self.fields[0].as_bytes());
+                let result = hasher.finalize();
+                // Take first 4 bytes as u32
+                let bytes: [u8; 4] = [result[0], result[1], result[2], result[3]];
+                u32::from_be_bytes(bytes) as i64
+            } else {
+                0
+            }
         };
 
         transaction
