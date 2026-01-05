@@ -13,6 +13,7 @@ pub struct RevlogEntry {
     pub factor: i32,       // Ease factor after review
     pub time: i32,         // Time taken to answer (milliseconds)
     pub review_type: i32,  // Type of review (0=learn, 1=review, 2=relearn, 3=cram)
+    pub usn: i32,          // Update sequence number
 }
 
 #[derive(Clone)]
@@ -21,7 +22,7 @@ pub struct Card {
     pub suspend: bool,
     // Optional review data fields - if None, defaults to new card values
     pub reps: Option<i32>,      // Number of reviews
-    pub lapses: Option<i32>,    // Number of lapses/failures  
+    pub lapses: Option<i32>,    // Number of lapses/failures
     pub ivl: Option<i32>,       // Interval in days
     pub due: Option<i64>,       // Due date (Anki format)
     pub factor: Option<i32>,    // Ease factor (e.g., 2500 = 2.5)
@@ -31,12 +32,13 @@ pub struct Card {
     pub review_history: Vec<RevlogEntry>, // Review history for this card
     pub data: Option<String>,  // Added data field for FSRS JSON etc.
     pub custom_card_id: Option<i64>, // Custom card ID to use instead of generated one
+    pub usn: i32,              // Update sequence number (default: -1)
 }
 
 impl Card {
     pub fn new(ord: i64, suspend: bool) -> Self {
-        Self { 
-            ord, 
+        Self {
+            ord,
             suspend,
             reps: None,
             lapses: None,
@@ -49,12 +51,13 @@ impl Card {
             review_history: Vec::new(),
             data: None, // Initialize new field
             custom_card_id: None,
+            usn: -1,
         }
     }
 
     /// Create a card with review data for cards that have learning history
     pub fn new_with_review_data(
-        ord: i64, 
+        ord: i64,
         suspend: bool,
         reps: i32,
         lapses: i32,
@@ -79,12 +82,13 @@ impl Card {
             review_history: Vec::new(),
             data: None, // Initialize, to be set by a setter or new constructor variant if needed
             custom_card_id: None,
+            usn: -1,
         }
     }
 
     /// Create a card with review data and review history
     pub fn new_with_review_history(
-        ord: i64, 
+        ord: i64,
         suspend: bool,
         reps: i32,
         lapses: i32,
@@ -111,7 +115,17 @@ impl Card {
             review_history,
             data, // Assign from parameter
             custom_card_id: None,
+            usn: -1,
         }
+    }
+
+    /// Sets the USN (update sequence number) for this card
+    ///
+    /// By default, USN is -1 (indicating local changes not synced).
+    /// Use this method to preserve USN values from imported Anki decks.
+    pub fn set_usn(mut self, usn: i32) -> Self {
+        self.usn = usn;
+        self
     }
 
     #[allow(dead_code)]
@@ -149,7 +163,7 @@ impl Card {
                     deck_id,                             // did (idx 2)
                     self.ord,                            // ord (idx 3)
                     timestamp as i64,                    // mod (idx 4)
-                    -1,                                  // usn (idx 5)
+                    self.usn,                            // usn (idx 5)
                     self.card_type.unwrap_or(0),         // type (idx 6)
                     queue,                               // queue (idx 7)
                     self.due.unwrap_or(0),               // due (idx 8)
@@ -174,7 +188,7 @@ impl Card {
                     params![
                         revlog_entry.id,                 // id (timestamp)
                         card_id,                         // cid (card id)
-                        -1,                              // usn
+                        revlog_entry.usn,                // usn
                         revlog_entry.ease,               // ease
                         revlog_entry.ivl,                // ivl
                         revlog_entry.last_ivl,           // lastIvl

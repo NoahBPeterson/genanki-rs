@@ -2,7 +2,7 @@
 name = "genanki-rs"
 version = "0.4.2"
 authors = ["Yannick Funk <yannickfunk@yahoo.de>"]
-edition = "2018"
+edition = "2024"
 description = "Crate to create decks for the open source flashcard platform Anki. Based on Python library genanki"
 license = "MIT"
 readme = "README.md"

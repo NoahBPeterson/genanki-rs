@@ -126,6 +126,23 @@ pub struct TemplateEntry {
 /// package.write_to_file("output.apkg")?;
 /// ```
 
+/// Graves table entry (deleted items tombstone)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraveEntry {
+    pub oid: i64,    // Object ID
+    pub gtype: i32,  // Type (0=card, 1=note, 2=deck)
+    pub usn: i32,    // Update sequence number
+}
+
+/// Tags table entry
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TagEntry {
+    pub tag: String,         // Tag name
+    pub usn: i32,            // Update sequence number
+    pub collapsed: i32,      // Whether tag is collapsed in UI (0 or 1)
+    pub config: Option<Vec<u8>>, // Optional config blob
+}
+
 pub struct Package {
     pub decks: Vec<Deck>,
     media_files: Vec<MediaFile>,
@@ -135,11 +152,14 @@ pub struct Package {
     notetypes: Vec<NotetypeEntry>,
     field_entries: Vec<FieldEntry>,
     template_entries: Vec<TemplateEntry>,
+    graves: Vec<GraveEntry>,
+    tags: Vec<TagEntry>,
     // Custom col table overrides for preserving original Anki data
     col_crt: Option<i64>,
     col_ver: Option<i64>,
     col_scm: Option<i64>,
     col_usn: Option<i32>,
+    col_ls: Option<i64>,
     col_conf: Option<String>,
     col_models: Option<String>,
     col_decks: Option<String>,
@@ -164,10 +184,13 @@ impl Package {
             notetypes: Vec::new(),
             field_entries: Vec::new(),
             template_entries: Vec::new(),
+            graves: Vec::new(),
+            tags: Vec::new(),
             col_crt: None,
             col_ver: None,
             col_scm: None,
             col_usn: None,
+            col_ls: None,
             col_conf: None,
             col_models: None,
             col_decks: None,
@@ -192,6 +215,7 @@ impl Package {
         ver: Option<i64>,
         scm: Option<i64>,
         usn: Option<i32>,
+        ls: Option<i64>,
         conf: Option<String>,
         models: Option<String>,
         decks: Option<String>,
@@ -201,6 +225,7 @@ impl Package {
         self.col_ver = ver;
         self.col_scm = scm;
         self.col_usn = usn;
+        self.col_ls = ls;
         self.col_conf = conf;
         self.col_models = models;
         self.col_decks = decks;
@@ -227,6 +252,16 @@ impl Package {
         self.template_entries.push(entry);
     }
 
+    /// Adds a grave entry (deleted item tombstone) to the package.
+    pub fn add_grave_entry(&mut self, entry: GraveEntry) {
+        self.graves.push(entry);
+    }
+
+    /// Adds a tag entry to the package.
+    pub fn add_tag_entry(&mut self, entry: TagEntry) {
+        self.tags.push(entry);
+    }
+
     /// Create a new package with `decks` and `media_files`,
     /// where `media_files` can be bytes from memory or a path on the filesystem
     /// 
@@ -241,10 +276,13 @@ impl Package {
             notetypes: Vec::new(),
             field_entries: Vec::new(),
             template_entries: Vec::new(),
+            graves: Vec::new(),
+            tags: Vec::new(),
             col_crt: None,
             col_ver: None,
             col_scm: None,
             col_usn: None,
+            col_ls: None,
             col_conf: None,
             col_models: None,
             col_decks: None,
@@ -381,6 +419,38 @@ impl Package {
                 )",
                 [],
             ).map_err(database_error)?;
+        }
+
+        // Populate graves table with deleted items tombstones
+        for grave in &self.graves {
+            if ver >= 18 {
+                transaction.execute(
+                    "INSERT INTO graves (oid, type, usn) VALUES (?, ?, ?)",
+                    params![grave.oid, grave.gtype, grave.usn],
+                ).map_err(database_error)?;
+            } else {
+                // Anki 2.0 schema has different column order
+                transaction.execute(
+                    "INSERT INTO graves (usn, oid, type) VALUES (?, ?, ?)",
+                    params![grave.usn, grave.oid, grave.gtype],
+                ).map_err(database_error)?;
+            }
+        }
+
+        // Populate tags table (only for version 12+ where tags table exists in schema)
+        // For version 11 and below, tags are stored in the 'col' table's 'tags' column
+        if ver >= 12 {
+            for tag_entry in &self.tags {
+                transaction.execute(
+                    "INSERT INTO tags (tag, usn, collapsed, config) VALUES (?, ?, ?, ?)",
+                    params![
+                        tag_entry.tag,
+                        tag_entry.usn,
+                        tag_entry.collapsed,
+                        tag_entry.config.as_ref().map(|v| v.as_slice())
+                    ],
+                ).map_err(database_error)?;
+            }
         }
 
         // Initialize dconf_map_for_col before version check (needed for col table later)
@@ -594,14 +664,18 @@ impl Package {
         // Use custom usn if provided, otherwise default to -1 (needs upload)
         let usn_val = self.col_usn.unwrap_or(-1);
 
+        // Use custom ls (last sync) if provided, otherwise default to 0 (never synced)
+        let ls_val = self.col_ls.unwrap_or(0);
+
         transaction.execute(
-            "INSERT INTO col (id, crt, mod, scm, ver, dty, usn, ls, conf, models, decks, dconf, tags) VALUES (NULL, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?)",
+            "INSERT INTO col (id, crt, mod, scm, ver, dty, usn, ls, conf, models, decks, dconf, tags) VALUES (NULL, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 crt_val,
                 mod_val,
                 scm_val,
                 ver,
                 usn_val,
+                ls_val,
                 conf_val,
                 models_json_str,
                 decks_json_str,

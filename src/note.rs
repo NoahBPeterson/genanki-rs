@@ -17,11 +17,21 @@ static CLOZE_REGEX: Lazy<Regex> =
 static CLOZE2_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new("<%cloze:(.+?)%>").expect("static regex"));
 
+// Regex for stripping HTML tags (used for checksum calculation)
+static HTML_TAG_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<[^>]*>").expect("static regex"));
+
 static UPDATES_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s){{c(\d+)::.+?}}").expect("static regex"));
 
 static INVALID_HTML_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"<(?!/?[a-z0-9]+(?: .*|/?)>)(?:.|\n)*?>").expect("static regex"));
+
+/// Strip HTML tags from text while preserving media filenames
+/// This matches Anki's strip_html_preserving_media_filenames behavior
+fn strip_html(text: &str) -> String {
+    HTML_TAG_REGEX.replace_all(text, "").to_string()
+}
 
 /// Note (Flashcard) to be added to a `Deck`
 #[derive(Clone)]
@@ -35,6 +45,7 @@ pub struct Note {
     cards: Vec<Card>,
     sfld_override: Option<String>,
     csum_override: Option<i64>,
+    usn: i32,
 }
 
 impl Note {
@@ -65,6 +76,7 @@ impl Note {
             cards,
             sfld_override: None,
             csum_override: None,
+            usn: -1,
         })
     }
 
@@ -103,6 +115,7 @@ impl Note {
             cards,
             sfld_override: None,
             csum_override: None,
+            usn: -1,
         })
     }
 
@@ -159,6 +172,15 @@ impl Note {
         self
     }
 
+    /// Sets the USN (update sequence number) for this note
+    ///
+    /// By default, USN is -1 (indicating local changes not synced).
+    /// Use this method to preserve USN values from imported Anki decks.
+    pub fn set_usn(mut self, usn: i32) -> Self {
+        self.usn = usn;
+        self
+    }
+
     /// Creates a Note with custom cards that include review data
     /// This is useful for preserving Anki review history when exporting
     pub fn new_with_cards(
@@ -187,6 +209,7 @@ impl Note {
             cards,
             sfld_override: None,
             csum_override: None,
+            usn: -1,
         })
     }
 
@@ -275,10 +298,22 @@ impl Note {
             override_csum
         } else {
             // Compute checksum from first field using Sha1
+            // This matches Anki's field_checksum(strip_html_preserving_media_filenames(fields[0]))
             use sha1::{Sha1, Digest};
             if !self.fields.is_empty() {
+                // First strip HTML tags (preserving media filenames)
+                let stripped = strip_html(&self.fields[0]);
+
+                // Then replace HTML entities
+                let field_for_checksum = stripped
+                    .replace("&nbsp;", " ")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&amp;", "&")
+                    .replace("&quot;", "\"");
+
                 let mut hasher = Sha1::new();
-                hasher.update(self.fields[0].as_bytes());
+                hasher.update(field_for_checksum.as_bytes());
                 let result = hasher.finalize();
                 // Take first 4 bytes as u32
                 let bytes: [u8; 4] = [result[0], result[1], result[2], result[3]];
@@ -296,8 +331,8 @@ impl Note {
                     self.get_guid(),      // guid
                     self.model.id,        // mid
                     timestamp as i64,     // mod
-                    -1,                   // usn
-                    self.format_tags(),   // TODO tags
+                    self.usn,             // usn
+                    self.format_tags(),   // tags
                     self.format_fields(), // flds
                     sfld_value,           // sfld - text value of sort field
                     csum,                 // csum
