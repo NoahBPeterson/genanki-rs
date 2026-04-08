@@ -33,6 +33,7 @@ pub struct Card {
     pub data: Option<String>,  // Added data field for FSRS JSON etc.
     pub custom_card_id: Option<i64>, // Custom card ID to use instead of generated one
     pub usn: i32,              // Update sequence number (default: -1)
+    pub mod_time: Option<i64>, // Original modification timestamp (preserves roundtrip)
 }
 
 impl Card {
@@ -52,6 +53,7 @@ impl Card {
             data: None, // Initialize new field
             custom_card_id: None,
             usn: -1,
+            mod_time: None,
         }
     }
 
@@ -83,6 +85,7 @@ impl Card {
             data: None, // Initialize, to be set by a setter or new constructor variant if needed
             custom_card_id: None,
             usn: -1,
+            mod_time: None,
         }
     }
 
@@ -116,6 +119,7 @@ impl Card {
             data, // Assign from parameter
             custom_card_id: None,
             usn: -1,
+            mod_time: None,
         }
     }
 
@@ -125,6 +129,15 @@ impl Card {
     /// Use this method to preserve USN values from imported Anki decks.
     pub fn set_usn(mut self, usn: i32) -> Self {
         self.usn = usn;
+        self
+    }
+
+    /// Sets the modification timestamp for this card
+    ///
+    /// By default, mod is set to the package build timestamp.
+    /// Use this method to preserve mod values from imported Anki decks.
+    pub fn set_mod_time(mut self, mod_time: i64) -> Self {
+        self.mod_time = Some(mod_time);
         self
     }
 
@@ -162,7 +175,7 @@ impl Card {
                     note_id,                             // nid (idx 1)
                     deck_id,                             // did (idx 2)
                     self.ord,                            // ord (idx 3)
-                    timestamp as i64,                    // mod (idx 4)
+                    self.mod_time.unwrap_or(timestamp as i64), // mod (idx 4)
                     self.usn,                            // usn (idx 5)
                     self.card_type.unwrap_or(0),         // type (idx 6)
                     queue,                               // queue (idx 7)

@@ -46,6 +46,7 @@ pub struct Note {
     sfld_override: Option<String>,
     csum_override: Option<i64>,
     usn: i32,
+    mod_time: Option<i64>,
 }
 
 impl Note {
@@ -77,6 +78,7 @@ impl Note {
             sfld_override: None,
             csum_override: None,
             usn: -1,
+            mod_time: None,
         })
     }
 
@@ -116,6 +118,7 @@ impl Note {
             sfld_override: None,
             csum_override: None,
             usn: -1,
+            mod_time: None,
         })
     }
 
@@ -181,6 +184,15 @@ impl Note {
         self
     }
 
+    /// Sets the modification timestamp for this note
+    ///
+    /// By default, mod is set to the package build timestamp.
+    /// Use this method to preserve mod values from imported Anki decks.
+    pub fn set_mod_time(mut self, mod_time: i64) -> Self {
+        self.mod_time = Some(mod_time);
+        self
+    }
+
     /// Creates a Note with custom cards that include review data
     /// This is useful for preserving Anki review history when exporting
     pub fn new_with_cards(
@@ -210,6 +222,7 @@ impl Note {
             sfld_override: None,
             csum_override: None,
             usn: -1,
+            mod_time: None,
         })
     }
 
@@ -330,7 +343,7 @@ impl Note {
                     note_id,              // id
                     self.get_guid(),      // guid
                     self.model.id,        // mid
-                    timestamp as i64,     // mod
+                    self.mod_time.unwrap_or(timestamp as i64), // mod
                     self.usn,             // usn
                     self.format_tags(),   // tags
                     self.format_fields(), // flds
